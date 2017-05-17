@@ -26,7 +26,7 @@ from trackpy.predict import NearestVelocityPredict
 import pandas as pd
 
 from sklearn.linear_model import LogisticRegression
-from itertools import combinations
+from itertools import combinations, product
 
 # classes
 
@@ -212,6 +212,10 @@ class TranslationFinder():
         self.cnts_joined = [self.join_cnts(inds) for inds in self.all_joins]
 
     def find_translations(self):
+        # this function is very complicated and messy -- i've been focusing
+        # on just getting it to work.  should simplify and/or add
+        # explanatory comments later
+
         plt.subplot(121)
         ax = plt.gca()
         plt.imshow(self.f0,cmap='gray')
@@ -250,27 +254,50 @@ class TranslationFinder():
             #import pdb; pdb.set_trace()
 
             pc = cv2.phaseCorrelate(box0.img,box1.img)
-            four_shifts = [[np.floor(pc[1]),np.floor(pc[0])],\
+            eight_shifts = [[np.floor(pc[1]),np.floor(pc[0])],\
                            [np.ceil(pc[1]),np.floor(pc[0])],\
                            [np.floor(pc[1]),np.ceil(pc[0])],\
                            [np.ceil(pc[1]),np.ceil(pc[0])]
                           ]
+            eight_shifts = [[(shift[0] + box.height) % box.height, \
+                             (shift[1] + box.width) % box.width]\
+                             for shift in eight_shifts] + eight_shifts
+            eight_shifts = [ [int(shift[0]), int(shift[1])] \
+                            for shift in eight_shifts]
             best_ratio = 1
 
-            best_shift = four_shifts[0]
-            for s in four_shifts:
+            best_shift = eight_shifts[0]
+            for s in eight_shifts:
                 neg_s = [-s[0],-s[1]]
                 synth_box1 = self.generate_translate(box0_1channel,box1_1channel,s)
                 synth_box0 = self.generate_translate(box1_1channel,box0_1channel,neg_s)
 
-                ref_score = self.score_gt(box0_1channel,box1_1channel,(0,0))
-                ratio0 = self.score_gt(box0_1channel,box1_1channel,s)/ref_score
-                ratio1 = self.score_gt(box1_1channel,box0_1channel,neg_s)/ref_score
+                (ref_score, _) = self.score_gt(box0_1channel,box1_1channel,(0,0))
+                score_forwards, crop = self.score_gt(box0_1channel,box1_1channel,s)
+                (score_backwards, _) = self.score_gt(box1_1channel,box0_1channel,neg_s)
+                ratio0 = score_forwards/ref_score
+                ratio1 = score_backwards/ref_score
 
                 ratio_s = max(ratio0,ratio1)
+                print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ', Score ' + str(ratio_s)
+                print 'Crop: ' + str(crop)
+                s = crop
+                if False:#len(self.all_joins[box_id]) == 2:
+
+                    plt.subplot(121)
+                    plt.imshow(box0.img,cmap='gray')
+                    plt.subplot(122)
+                    plt.imshow(synth_box0.squeeze(),cmap='gray')
+                    plt.show()
+
+                    plt.subplot(121)
+                    plt.imshow(box1.img,cmap='gray')
+                    plt.subplot(122)
+                    plt.imshow(synth_box1.squeeze(),cmap='gray')
+                    plt.show()
 
                 if ratio_s < best_ratio:
-                    if True:#(len(self.all_joins[box_id]) == 1) or ratio_s < 0.1:
+                    if (len(self.all_joins[box_id]) == 1) or ratio_s < 0.1:
                         # note: make the 0.1s above a hyperparameter
 
                         # above statement applies more stringent condition to
@@ -286,23 +313,11 @@ class TranslationFinder():
             s = best_shift
             neg_s = [-s[0],-s[1]]
 
-            print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ', Score ' + str(best_ratio)
 
             synth_box1 = self.generate_translate(box0_1channel,box1_1channel,s)
             synth_box0 = self.generate_translate(box1_1channel,box0_1channel,neg_s)
-            '''
-            plt.subplot(121)
-            plt.imshow(box0.img,cmap='gray')
-            plt.subplot(122)
-            plt.imshow(synth_box0.squeeze(),cmap='gray')
-            plt.show()
 
-            plt.subplot(121)
-            plt.imshow(box1.img,cmap='gray')
-            plt.subplot(122)
-            plt.imshow(synth_box1.squeeze(),cmap='gray')
-            plt.show()
-            '''
+
             #if (len(self.cnts) > 2) and (len(self.all_joins[box_id]) > 1):
                 #import pdb; pdb.set_trace()
 
@@ -370,12 +385,10 @@ class TranslationFinder():
             box = self.valid_boxes[ind]
             shift = self.mover_shifts[ind]
             n_shift = -shift
-            if self.mover_scores[ind] < 0.9:
-                # note: make the 0.9 above a hyperparameter
+            if self.mover_scores[ind] < 1:
+                # note: make the 1 above a hyperparameter?
                 # the below crops the boxes if we're reasonably sure we've
                 # identified an actual displacement
-                shift = Point(shift.x % box.height, shift.y % box.width)
-                n_shift = -shift
                 box0 = Box(box.ll-shift.thresh(-1), box.ur-shift.thresh(1))
                 box1 = Box(box.ll-n_shift.thresh(-1), box.ur-n_shift.thresh(1))
             else:
@@ -384,6 +397,13 @@ class TranslationFinder():
             box0.add_image(self.frame_pair.s0)
             box1.add_image(self.frame_pair.s1)
             self.mover_boxes.append([box0, box1])
+            plt.subplot(121)
+            plt.imshow(box0.img)
+            plt.show()
+            plt.subplot(122)
+            plt.imshow(box1.img)
+            plt.show()
+
         return self.mover_boxes
 
     def make_join_combinations(self):
@@ -411,8 +431,8 @@ class TranslationFinder():
     def generate_translate(self, f0, f1, shift, debug=False):
         #out = np.zeros(f0.shape)
         n_changed = 0
-        s_x = int(shift[0])
-        s_y = int(shift[1])
+        s_x = shift[0]
+        s_y = shift[1]
         '''
         pad_x = (max(s_x,0), max(-s_x,0))
         pad_y = (max(s_y,0), max(-s_y,0))
@@ -425,8 +445,8 @@ class TranslationFinder():
         out = f0_padded[x_start:(x_start + f0.shape[0]),\
                         y_start:(y_start + f0.shape[1]),\
                         :]
-        '''
 
+        '''
         out = np.roll(f0,(s_x,s_y),(0,1))
 
         '''
@@ -450,8 +470,33 @@ class TranslationFinder():
             return out
 
     def score_gt(self, f0, f1, shift):
-        err = f1 - self.generate_translate(f0, f1, shift)
-        return np.sqrt(sum(err.flatten()**2))
+        four_crops = []
+        four_scores = []
+        w = f0.shape[0]
+        h = f0.shape[1]
+
+        gt = self.generate_translate(f0, f1, shift)
+        err = np.sqrt(sum((f1 - gt).flatten()**2))
+
+        for crop in product([shift[0], shift[0] - np.sign(shift[0]) * w],\
+                            [shift[1], shift[1] - np.sign(shift[1]) * h]):
+            four_crops.append(crop)
+            n_crop = [-crop[0], -crop[1]]
+            try:
+                f0_crop = f0[max(-crop[0],0):w-max(crop[0],0),\
+                         max(-crop[1],0):h-max(crop[1],0)]
+            except TypeError:
+                import pdb; pdb.set_trace()
+            f1_crop = f1[max(-n_crop[0],0):w-max(n_crop[0],0),\
+                         max(-n_crop[1],0):h-max(n_crop[1],0)]
+
+            gt_crop = gt[max(-n_crop[0],0):w-max(n_crop[0],0),\
+                         max(-n_crop[1],0):h-max(n_crop[1],0)]
+
+            var_crop = ((f1_crop + gt_crop).flatten()**2).var()
+            four_scores.append(var_crop)
+        best_index = np.argmax(four_scores)
+        return err, four_crops[best_index]
 
 
 
