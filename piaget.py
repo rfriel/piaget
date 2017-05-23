@@ -13,6 +13,7 @@ import cv2
 import pdb
 from time import sleep
 import re
+import cPickle
 
 import tensorflow.python.platform
 from tensorflow.python.platform import gfile
@@ -46,10 +47,18 @@ class Point():
         if self.is_none() or p.is_none():
             return Point(None, None)
         return Point(self.x - p.x, self.y - p.y)
+    def __mul__(self, t):
+        return Point(t*self.x, t*self.y)
+    def __rmul__(self, t):
+        return self.__mul__(t)
+    def __truediv__(self, t):
+        return self.__mul__(1./t)
     def __neg__(self):
         return Point(-self.x, -self.y)
     def __eq__(self, p):
         return (self.x == p.x) and (self.y == p.y)
+    def to_tuple(self):
+        return (self.x, self.y)
 
     def sq_dist(self, p):
         if self.is_none() or p.is_none():
@@ -186,7 +195,13 @@ class Box():
         return '(' + str(self.ll.x) + '-' + str(self.ur.x) + ', ' + \
         str(self.ll.y) + '-' + str(self.ur.y) + ')'
     def __sub__(self, b):
-        return box(self.ll-b.ll, self.ur-bb.ur)
+        return Box(self.ll-b.ll, self.ur-b.ur)
+    def __mul__(self, t):
+        return Box(t*self.ll, t*self.ur)
+    def __rmul__(self, t):
+        return self.__mul__(t)
+    def __truediv__(self, t):
+        return self.__mul__(1./t)
     def __eq__(self, b):
         return (self.ll == b.ll) and (self.ur == b.ur)
 
@@ -273,17 +288,19 @@ class TranslationFinder():
                 synth_box0 = self.generate_translate(box1_1channel,box0_1channel,neg_s)
 
                 (ref_score, _) = self.score_gt(box0_1channel,box1_1channel,(0,0))
-                score_forwards, crop = self.score_gt(box0_1channel,box1_1channel,s)
-                (score_backwards, _) = self.score_gt(box1_1channel,box0_1channel,neg_s)
+                score_forwards, crop_forwards = self.score_gt(box0_1channel,box1_1channel,s)
+                (score_backwards, crop_backwards) = self.score_gt(box1_1channel,box0_1channel,neg_s)
                 ratio0 = score_forwards/ref_score
                 ratio1 = score_backwards/ref_score
 
                 ratio_s = max(ratio0,ratio1)
-                print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ', Score ' + str(ratio_s)
-                print 'Crop: ' + str(crop)
-                s = crop
-                if False:#len(self.all_joins[box_id]) == 2:
+                s = crop_forwards
+                if len(self.all_joins[box_id]) < 3:
 
+                    print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ' Score ' + str(ratio_s)
+                    print 'score_forwards: ' + str(score_forwards) + ', score_backwards: ' + str(score_backwards)
+                    print 'Crop: ' + str(crop_forwards) + ', crop_backwards: ' +  str(crop_backwards) + '\n'
+                    '''
                     plt.subplot(121)
                     plt.imshow(box0.img,cmap='gray')
                     plt.subplot(122)
@@ -295,7 +312,7 @@ class TranslationFinder():
                     plt.subplot(122)
                     plt.imshow(synth_box1.squeeze(),cmap='gray')
                     plt.show()
-
+                    '''
                 if ratio_s < best_ratio:
                     if (len(self.all_joins[box_id]) == 1) or ratio_s < 0.1:
                         # note: make the 0.1s above a hyperparameter
@@ -344,9 +361,10 @@ class TranslationFinder():
             forbidden_inds = set(self.cnt_best_params[winner][0])
             print 'winner: ' + str(winner)
             print 'winner params: ' + str(self.cnt_best_params[winner])
-            print 'forbidden_inds: ' + str(forbidden_inds)
-            print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
-            print 'cnt_score_params_remaining :' + str(cnt_score_params_remaining) + '\n'
+            print 'winner score: ' + str(self.cnt_best_scores[winner])
+            #print 'forbidden_inds: ' + str(forbidden_inds)
+            #print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
+            #print 'cnt_score_params_remaining :' + str(cnt_score_params_remaining) + '\n'
             revised_scores = {k: [] for k in cnt_scores_remaining}
             revised_params = {k: [] for k in cnt_score_params_remaining}
             #import pdb; pdb.set_trace()
@@ -354,14 +372,8 @@ class TranslationFinder():
                 params_k = cnt_score_params_remaining[k]
                 for j, par in enumerate(params_k):
                     join_k_j = par[0]
-                    print 'Examining join ' + str(join_k_j) + ', for box ' + str(k)
-                    if len(forbidden_inds & set(join_k_j)) > 0:
-                        #del cnt_scores_remaining[k][j]
-                        #del cnt_score_params_remaining[k][j]
-                        print 'Deleted join ' + str(join_k_j) + ', for box ' + str(k)
-                        print 'j: ' + str(j)
-                        print 'len(params_k): ' + str(len(params_k))
-                    else:
+                    #print 'Examining join ' + str(join_k_j) + ', for box ' + str(k)
+                    if len(forbidden_inds & set(join_k_j)) == 0:
                         revised_scores[k].append(cnt_scores_remaining[k][j])
                         revised_params[k].append(cnt_score_params_remaining[k][j])
             cnt_scores_remaining = revised_scores.copy()
@@ -369,8 +381,8 @@ class TranslationFinder():
             for ind in forbidden_inds:
                 cnt_scores_remaining.pop(ind)
                 cnt_score_params_remaining.pop(ind)
-            print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
-            print 'cnt_score_params_remaining :' +str(cnt_score_params_remaining) + '\n'
+            #print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
+            #print 'cnt_score_params_remaining :' +str(cnt_score_params_remaining) + '\n'
         self.mover_joins = set()
         self.mover_shifts = {}
         self.mover_scores = {}
@@ -399,7 +411,6 @@ class TranslationFinder():
             self.mover_boxes.append([box0, box1])
             plt.subplot(121)
             plt.imshow(box0.img)
-            plt.show()
             plt.subplot(122)
             plt.imshow(box1.img)
             plt.show()
@@ -567,7 +578,10 @@ def init_env(env,n_steps):
 
 # functions: running the AI
 
-def play(num_steps, env, img_dir, init_steps, \
+def downsample84(s):
+    return s#np.array(Image.fromarray(s).resize((84,84)))
+
+def play(num_steps, env, img_dir, mt_dir, init_steps, \
          random_seed = None,\
          hyperparams={'force_square': False,
             'tp_part_size': 11,
@@ -580,20 +594,27 @@ def play(num_steps, env, img_dir, init_steps, \
     img_dir = img_dir + str(game_id) + '/'
     os.mkdir(img_dir)
 
+    mt_dir = mt_dir + str(game_id) + '/'
+    os.mkdir(mt_dir)
+
+    mt_filename = mt_dir + 'mt.pkl'
+
     mover_tracker = MoverTracker(game_id, img_dir, hyperparams)
 
     s0, done = init_env(env, init_steps)
+    s0 = downsample84(s0)
     if random_seed is not None:
         np.random.seed(seed=random_seed)
     for i in range(num_steps):
 
         if done:
             s0, done = init_env(env, init_steps)
-
+            s0 = downsample84(s0)
         if i%1 == 0:
             # new action
             a = np.random.randint(env.action_space.n)#env.action_space.sample()
         s1,r,d,info = env.step(a)
+        s1 = downsample84(s1)
 
         #s0 = s0[:160,:]
         #s1 = s1[:160,:]
@@ -604,6 +625,9 @@ def play(num_steps, env, img_dir, init_steps, \
 
         s0 = s1
 
+    with open(mt_filename,'w') as mt_file:
+        cPickle.dump(mover_tracker, mt_file)
+
     return mover_tracker
 
 # main
@@ -612,5 +636,6 @@ if __name__ == '__main__':
     env = gym.make('MsPacman-v0')
     num_steps = 100
     img_dir = 'img/'
-    mt = play(num_steps, env, img_dir, 10)
+    mt_dir = 'mt'
+    mt = play(num_steps, env, img_dir, mt_dir, 10)
     print 'Game ID (for image directory): ' + str(mt.game_id)
