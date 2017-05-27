@@ -178,7 +178,7 @@ class FramePair():
         fd_grey = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
         thresh = cv2.threshold(fd_grey,1,255,cv2.THRESH_BINARY)[1]
         thresh_dilated = cv2.dilate(thresh,None,iterations=1)
-        (cnts, _) = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        (_, cnts, _) = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
         self.finder = TranslationFinder(self, thresh_dilated, cnts)
         self.mover_boxes = self.finder.find_translations()
@@ -268,7 +268,7 @@ class TranslationFinder():
             box1_1channel = np.expand_dims(box1.img,2)
             #import pdb; pdb.set_trace()
 
-            pc = cv2.phaseCorrelate(box0.img,box1.img)
+            pc = cv2.phaseCorrelate(box0.img,box1.img)[0]
             eight_shifts = [[np.floor(pc[1]),np.floor(pc[0])],\
                            [np.ceil(pc[1]),np.floor(pc[0])],\
                            [np.floor(pc[1]),np.ceil(pc[0])],\
