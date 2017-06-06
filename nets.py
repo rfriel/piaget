@@ -16,17 +16,19 @@ import re
 
 import cPickle
 
-import pyemd
+from pyemd import emd
 
 from PIL import Image
 import cv2
+
+from scipy.spatial import distance_matrix
 
 def local_blob(size):
     blob = np.zeros((size, size))
     middle = (size-1)/2
     for i in range(size):
         for j in range(size):
-            blob[i,j] = 1./(1+((i-middle)**2 + (j-middle)**2))
+            blob[i,j] = 1.#/(1+((i-middle)**2 + (j-middle)**2))
     return blob
 
 class protoQnetwork():
@@ -36,6 +38,8 @@ class protoQnetwork():
         self.blob_size = blob_size
         self.lr = lr
         self.eps = eps
+        self.n_act = env.action_space.n
+
         self.scalarInput =  tf.placeholder(shape=[None,210*160*3*2],dtype=tf.float32)
         self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,210,160,3*2])
 
@@ -59,27 +63,32 @@ class protoQnetwork():
                                          'MAX', 'VALID', stride=[4,4])
 
         #Leaky1 = keras.layers.LeakyReLU(0.1)
-        self.conv1 = slim.conv2d( \
-            inputs=self.conv_dm_pool,num_outputs=16,kernel_size=[4,4],stride=[2,2],
-                                 padding='VALID', biases_initializer=None)
+        # self.conv1 = slim.conv2d( \
+        #     inputs=self.conv_dm_pool,num_outputs=16,kernel_size=[4,4],stride=[2,2],
+        #                          padding='VALID', biases_initializer=None)
+
+        self.conv1 = slim.pool( \
+            self.conv_dm_pool,[4,4],'MAX','VALID',stride=[2,2])
+
 
         self.conv1_pool = slim.pool(self.conv1, [3,3], \
                                          'MAX', 'VALID', stride=[3,3])
 
-        #Leaky2 = keras.layers.LeakyReLU(0.1)
+        Leaky2 = keras.layers.LeakyReLU(0.1)
 
         # for width 250: kernel_size=[10,6]
         # for width 210: kernel_size=[8,6]
         self.conv2 = slim.conv2d( \
             inputs=self.conv1_pool,num_outputs=h_size,kernel_size=[8,6],stride=[1,1],
-                                 padding='VALID', biases_initializer=None)
+                                 padding='VALID', biases_initializer=None,
+                                 activation_fn=Leaky2)
         #We take the output from the final convolutional layer and split it into separate advantage and value streams.
 
         self.streamAC,self.streamVC = tf.split(self.conv2,2,3)
         self.streamA = slim.flatten(self.streamAC)
         self.streamV = slim.flatten(self.streamVC)
         xavier_init = tf.contrib.layers.xavier_initializer()
-        self.AW = tf.Variable(xavier_init([h_size//2,env.action_space.n]))
+        self.AW = tf.Variable(xavier_init([h_size//2,self.n_act]))
         self.VW = tf.Variable(xavier_init([h_size//2,1]))
 
         self.Advantage = tf.matmul(self.streamA,self.AW)
@@ -95,7 +104,7 @@ class protoQnetwork():
         #Below we obtain the loss by taking the sum of squares difference between the target and prediction Q values.
         self.targetQ = tf.placeholder(shape=[None],dtype=tf.float32)
         self.actions = tf.placeholder(shape=[None],dtype=tf.int32)
-        self.actions_onehot = tf.one_hot(self.actions,env.action_space.n,dtype=tf.float32)
+        self.actions_onehot = tf.one_hot(self.actions,self.n_act,dtype=tf.float32)
 
         self.Q = tf.reduce_sum(tf.multiply(self.Qout, self.actions_onehot), axis=1)
 
@@ -194,12 +203,19 @@ class protoQnetwork():
 
 
 class protoModelnetwork():
-    def __init__(self, env, h_size, mover_prototypes, mover_disps, blob_size,
-                 model_name, dueling=True, lr=0.001, eps=1e-3):
+    def __init__(self, env, h_size, mover_prototypes, mover_disps,
+                 md_equiv_classes, blob_size,
+                 model_name, dueling=True, lr=0.001, eps=1e-3,
+                 mean_reward_pool=None, dists=None):
         self.model_name = model_name
         self.blob_size = blob_size
         self.lr = lr
         self.eps = eps
+        self.n_act = env.action_space.n
+
+        self.mean_reward_pool = mean_reward_pool
+        self.dists = dists
+
         self.scalarInput =  tf.placeholder(shape=[None,210*160*3*2],dtype=tf.float32)
         self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,210,160,3*2])
 
@@ -217,29 +233,60 @@ class protoModelnetwork():
         self.conv_disps = tf.concat(self.disp_conv_list,3)
 
         self.conv_dm = tf.concat([self.conv_disps,
-                                            self.conv_movers],3)
+                                             self.conv_movers],3)
 
         # want to predict this for next frame
         self.conv_dm_pool = slim.pool(self.conv_dm, [4,4], \
                                          'MAX', 'VALID', stride=[4,4])
 
-
         # next frame prediction stuff
-        self.out_shape = self.conv_dm_pool.get_shape().as_list()[1:3]
-        self.n_ch = self.conv_dm_pool.get_shape().as_list()[-1]
-        self.VA_n_ch = (1 + env.action_space.n)
+        self.n_ch_cdp = self.conv_dm_pool.get_shape().as_list()[-1]
 
-        self.conv1_model = slim.conv2d( \
-            inputs=self.conv_dm_pool,num_outputs=self.n_ch,\
-                                 kernel_size=[6,6],stride=[1,1],\
-                                 padding='SAME')
+        eq_tensors = []
+        channels = tf.split(self.conv_dm_pool, self.n_ch_cdp, 3)
+        m_id_shift = 0
+        for m_id, m_eq in enumerate(md_equiv_classes):
+            for eq in m_eq:
+                eq_tensors.append(tf.reduce_max(
+                    tf.stack(
+                        [channels[ch_ind + m_id_shift] for ch_ind in eq],3),
+                    3))
+            m_id_shift += len(mover_disps[m_id])
+        eq_tensors.extend(channels[m_id_shift:])
+        self.cdp_equiv = tf.concat(eq_tensors,3)
+        self.out_shape = self.cdp_equiv.get_shape().as_list()[1:3]
+        self.n_ch = self.cdp_equiv.get_shape().as_list()[-1]
+
+        f0x, f1x = self.get_position_filters(0,2)
+        f0y, f1y = self.get_position_filters(1,2)
+        f2x, f3x = self.get_position_filters(0,4)
+        f2y, f3y = self.get_position_filters(1,4)
+        self.pos_filters = tf.stack([f0x, f1x, f0y, f1y, \
+                            f2x, f3x, f2y, f3y],
+                                    3)
+
+        #self.cdp_with_pos = tf.concat([self.cdp_equiv,
+        #                                 self.pos_filters],3)
+        self.cdp_with_pos = self.cdp_equiv
+
+        self.n_ch_with_pos = self.cdp_with_pos.get_shape().as_list()[-1]
+        self.VA_n_ch = (1 + self.n_act)
 
         Leaky1 = keras.layers.LeakyReLU(0.01)
+        self.conv1_model = slim.conv2d( \
+            inputs=self.cdp_with_pos,num_outputs=self.n_ch_with_pos,\
+                                 kernel_size=[6,6],stride=[1,1],\
+                                 padding='SAME',
+                                activation_fn=Leaky1,
+                                biases_initializer=None)
+
+        Leaky2 = keras.layers.LeakyReLU(0.01)
         self.conv2_model = slim.conv2d( \
             inputs=self.conv1_model,num_outputs=self.VA_n_ch*self.n_ch, \
                                        kernel_size=[6,6],stride=[1,1], \
                                        padding='SAME',
-                                      activation_fn=Leaky1)
+                                      activation_fn=Leaky2,
+                                      biases_initializer=None)
 
         self.streams = tf.split(self.conv2_model,
                                              self.VA_n_ch,
@@ -247,12 +294,12 @@ class protoModelnetwork():
         self.streamV = self.streams[0]
         self.streamA = tf.stack(self.streams[1:],4)
         self.actions = tf.placeholder(shape=[None],dtype=tf.int32)
-        self.actions_onehot = tf.one_hot(self.actions,env.action_space.n,dtype=tf.float32)
+        self.actions_onehot = tf.one_hot(self.actions,self.n_act,dtype=tf.float32)
 
         self.pred_pool = self.streamV +\
             (tf.einsum('abcde,ae->abcd',self.streamA,self.actions_onehot))
 
-        target_shape = self.conv_dm_pool.get_shape().as_list()
+        target_shape = self.cdp_equiv.get_shape().as_list()
         self.target_pool = tf.placeholder(shape=target_shape,dtype=tf.float32)
 
 
@@ -268,37 +315,70 @@ class protoModelnetwork():
         self.updateModel = self.trainer.minimize(self.loss,
                                                  var_list=self.trainables)
 
-        # reward model -- here we're using the same layers as the
-        # Q model above, but only one output
-        self.conv1_reward = slim.conv2d( \
-            inputs=self.conv_dm_pool,num_outputs=16,kernel_size=[4,4],stride=[2,2],
-                                 padding='VALID', biases_initializer=None)
+        # emd-based q estimates
+        if self.mean_reward_pool is not None:
+            if self.dists is None:
+                self.make_distance_matrix()
 
-        self.conv1_reward_pool = slim.pool(self.conv1_reward, [3,3], \
-                                         'MAX', 'VALID', stride=[3,3])
+            self.demands = []
+            for ii in range(self.n_ch):
+                demand = np.asarray(np.reshape(mean_reward_pool[:,:,ii], (52*40,))\
+                                .astype('float64'), order='C')
+                demand = demand / np.sum(demand)
+                self.demands.append(demand)
 
+            self.act_frames = self.streamA + \
+            tf.stack([self.streamV for i in range(self.n_act)],4)
 
-        # for width 250: kernel_size=[10,6]
-        # for width 210: kernel_size=[8,6]
-        self.conv2_reward = slim.conv2d( \
-            inputs=self.conv1_reward_pool,num_outputs=1,kernel_size=[8,6],stride=[1,1],
-                                 padding='VALID', biases_initializer=None)
+    def get_Q(self, batch):
 
-        self.target_reward = tf.placeholder(shape=[None],dtype=tf.float32)
+        self.act_emd_batch = [self.get_emds(act_frame) for act_frame in batch]
 
-        self.pred_reward = self.conv2_reward[:,0,0,0]
+        self.Qout = [self.emd_to_q(np.mean(act_emds,axis=1)) for act_emds \
+                     in self.act_emd_batch]
+        self.predict = [np.argmax(Q) for Q in self.Qout]
 
-        self.reward_loss = tf.reduce_mean(
-            tf.square(self.target_reward - self.pred_reward))
+    def get_emds(self, act_frame):
+        act_emds = np.zeros((self.n_act, self.n_ch))
+        for act_ind in range(self.n_act):
+            for ch_ind in range(self.n_ch):
+                #print(act_ind, ch_ind)
 
-        self.reward_trainer = tf.train.AdamOptimizer(learning_rate=0.01,
-                                             epsilon=1e-8)
-        self.trainables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-         scope='(?!' + self.model_name +
-                       '/piaget)')
+                supply = \
+                np.asarray(np.reshape(act_frame[:,:,ch_ind,act_ind], \
+                                      (52*40,)
+                                      ).astype('float64'), order='C')
+                supply = (supply + np.abs(supply)) / 2
+                demand = self.demands[ch_ind]
 
-        self.reward_updateModel = self.reward_trainer.minimize(self.reward_loss,
-                                                var_list=self.trainables)
+                if min(np.sum(demand), np.sum(supply)) > 0:
+                    supply = supply / np.sum(supply)
+
+                    act_emd = emd(supply, demand, self.dists)
+                    act_emds[act_ind, ch_ind] = act_emd
+
+        for act_ind in range(self.n_act):
+            for ch_ind in range(self.n_ch):
+                if act_emds[act_ind, ch_ind] == 0:
+                    act_emds[act_ind, ch_ind] = \
+                    np.mean(act_emds[act_ind, :][act_emds[act_ind, :] > 0])
+
+        return act_emds
+
+    def emd_to_q(self, emds):
+        return 1./emds
+
+    def make_distance_matrix(self):
+        x_coords = np.array([[j for j in range(40)] for i in range(52)])
+        y_coords = np.array([[i for j in range(40)] for i in range(52)])
+
+        x_flat = np.reshape(x_coords,(52*40,))
+        y_flat = np.reshape(y_coords,(52*40,))
+        coords_flat = [[x,y] for x, y in zip(x_flat, y_flat)]
+
+        dists = distance_matrix(coords_flat,coords_flat)
+        self.dists = np.asarray(dists, order='C')
+
     def get_conv_mover(self, proto, ind):
 
         p0 = proto/(255.)
@@ -327,16 +407,42 @@ class protoModelnetwork():
                               )
             self.biases = tf.get_variable(name='bias',shape=(2),
                                     initializer=tf.constant_initializer(
-                                        -0.75))
+                                        -0.9))
             self.bias = tf.nn.bias_add(self.conv, self.biases)
             self.conv_p0 = tf.nn.relu(self.bias)
             return self.conv_p0
+
+    def get_position_filters(self, axis, reps, weight=0.01):
+        filter0 = np.zeros(self.out_shape,dtype='float32')
+        filter1 = np.zeros(self.out_shape,dtype='float32')
+
+        if axis == 1:
+            filter0 = filter0.T
+            filter1 = filter1.T
+
+        len_to_fill = filter0.shape[0]
+        len_per_band = len_to_fill // reps
+
+        for ii in range(len_to_fill):
+            if (ii // len_per_band) % 2 == 0:
+                filter0[ii,:] = weight
+            else:
+                filter1[ii,:] = weight
+
+        if axis == 1:
+            filter0 = filter0.T
+            filter1 = filter1.T
+
+        f0_tensor = tf.zeros_like(self.conv_dm_pool[:,...,0]) + tf.convert_to_tensor(filter0)
+        f1_tensor = tf.zeros_like(self.conv_dm_pool[:,...,0]) + tf.convert_to_tensor(filter1)
+
+        return f0_tensor, f1_tensor
 
     def get_conv_disp(self, disps, ind):
         blob = local_blob(self.blob_size)
 
         blob_norm = np.sqrt(np.sum(blob**2))
-        blob = blob / blob_norm
+        #blob = blob / blob_norm
 
         conv_disps = []
         for j, disp in enumerate(disps):
@@ -357,8 +463,8 @@ class protoModelnetwork():
                        'constant')
 
                 blob_multi_frame = np.stack(\
-                                            [blob_frame0, \
-                                             blob_frame1]\
+                                            [blob_frame0-blob_frame1, \
+                                             blob_frame1-blob_frame0]\
                                             ,2)
                 blob_multi_frame = np.expand_dims(blob_multi_frame, 3)
 
@@ -373,7 +479,7 @@ class protoModelnetwork():
                   )
                 self.biases = tf.get_variable(name='bias',shape=(1),
                                         initializer=tf.constant_initializer(
-                                            -0.))
+                                            -0.2))
                 self.bias = tf.nn.bias_add(self.conv, self.biases)
                 conv_disp = tf.nn.relu(self.bias)
                 conv_disps.append(conv_disp)
