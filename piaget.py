@@ -507,128 +507,11 @@ class TranslationFinder():
 
 
 
-class Categorizer():
-    def __init__(self, game_id, img_dir, hyperparams):
-        self.game_id = game_id
-        self.img_dir = img_dir + str(game_id) + '/'
-        self.hyperparams = hyperparams
-
-    def categorize_movers(self):
-        mover_dirs = [self.img_dir + d + '/'
-                      for d in os.listdir(self.img_dir) if d.find('mover') == 0]
-
-        self.features, self.labels = self.get_inception_features(mover_dirs)
-
-        self.LR = LogisticRegression()
-        self.LR.fit(self.features, self.labels)
-
-
-
-    def get_inception_features(self, class_dirs):
-        nb_features = 2048
-        features = []
-        labels = []
-
-        self.create_inception_graph()
-
-        with tf.Session() as sess:
-
-            next_to_last_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-            ind = 0
-
-            for class_dir in class_dirs:
-                class_label = int(class_dir[class_dir.find('mover')+5:-1])
-                list_images = [class_dir+f for f in os.listdir(class_dir) if re.search('jpg|JPG', f)]
-                for image in list_images:
-                    if (ind%10 == 0):
-                        print('Processing %s...' % (image))
-                    if not gfile.Exists(image):
-                        tf.logging.fatal('File does not exist %s', image)
-
-                    image_data = gfile.FastGFile(image, 'rb').read()
-                    feature_vec = sess.run(next_to_last_tensor,
-                                           {'DecodeJpeg/contents:0': image_data})
-                    features.append(np.squeeze(feature_vec))
-                    labels.append(class_label)
-                    ind += 1
-        return np.array(features), np.array(labels)
-
-    def create_inception_graph(self):
-      """Creates a graph from saved GraphDef file and returns a saver."""
-      # Creates graph from saved graph_def.pb.
-      with tf.gfile.FastGFile(os.path.join(
-          './', 'classify_image_graph_def.pb'), 'rb') as f:
-        graph_def = tf.GraphDef()
-        graph_def.ParseFromString(f.read())
-        _ = tf.import_graph_def(graph_def, name='')
-
-
-# functions: gym
-
-def init_env(env,n_steps):
-    env.reset()
-    # e.g. nothing happens in first 100 steps of ms pacman
-    for i in range(n_steps):
-        s,r,d,info = env.step(env.action_space.sample()) # take a random action
-    return s,d
-
-# functions: running the AI
-
-def downsample84(s):
-    return s#np.array(Image.fromarray(s).resize((84,84)))
-
-def play(num_steps, env, img_dir, mt_dir, init_steps, \
-         random_seed = None,\
-         hyperparams={'force_square': False,
-            'tp_part_size': 11,
-            'tp_max_disp': 21,
-            'tp_memory': 10},
-         debug=False):
-
-    game_id = str(random.randint(0,1e6))
-
-    img_dir = img_dir + str(game_id) + '/'
-    os.mkdir(img_dir)
-
-    mt_dir = mt_dir + str(game_id) + '/'
-    os.mkdir(mt_dir)
-
-    mt_filename = mt_dir + 'mt.pkl'
-
-    mover_tracker = MoverTracker(game_id, img_dir, hyperparams)
-
-    s0, done = init_env(env, init_steps)
-    s0 = downsample84(s0)
-    if random_seed is not None:
-        np.random.seed(seed=random_seed)
-    for i in range(num_steps):
-
-        print 'frame ' + str(i)
-        if done:
-            s0, done = init_env(env, init_steps)
-            s0 = downsample84(s0)
-        if i%1 == 0:
-            # new action
-            a = np.random.randint(env.action_space.n)#env.action_space.sample()
-        s1,r,d,info = env.step(a)
-        s1 = downsample84(s1)
-
-        #s0 = s0[:160,:]
-        #s1 = s1[:160,:]
-
-        frame_pair = FramePair(s0, s1, a, r)
-
-        mover_tracker.process_frame_pair(frame_pair)
-
-        s0 = s1
-
-    with open(mt_filename,'w') as mt_file:
-        cPickle.dump(mover_tracker, mt_file)
-
-    return mover_tracker
-
 class Prototyper():
     def __init__(self, game_id):
+        self.prototype_game(game_id)
+
+    def prototype_game(self, game_id):
         self.game_id = game_id
         self.mt_dir = 'mt/' + str(self.game_id) + '/'
         self.mt_filename = self.mt_dir + 'mt.pkl'
@@ -714,6 +597,71 @@ class Prototyper():
                 symm_disps.add((disp[0],-disp[1]))
                 symm_disps.add((-disp[0],-disp[1]))
         return list(symm_disps)
+
+
+# functions: gym
+
+def init_env(env,n_steps):
+    env.reset()
+    # e.g. nothing happens in first 100 steps of ms pacman
+    for i in range(n_steps):
+        s,r,d,info = env.step(env.action_space.sample()) # take a random action
+    return s,d
+
+# functions: running the AI
+
+def downsample84(s):
+    return s#np.array(Image.fromarray(s).resize((84,84)))
+
+def play(num_steps, env, img_dir, mt_dir, init_steps, \
+         random_seed = None,\
+         hyperparams={'force_square': False,
+            'tp_part_size': 11,
+            'tp_max_disp': 21,
+            'tp_memory': 10},
+         debug=False):
+
+    game_id = str(random.randint(0,1e6))
+
+    img_dir = img_dir + str(game_id) + '/'
+    os.mkdir(img_dir)
+
+    mt_dir = mt_dir + str(game_id) + '/'
+    os.mkdir(mt_dir)
+
+    mt_filename = mt_dir + 'mt.pkl'
+
+    mover_tracker = MoverTracker(game_id, img_dir, hyperparams)
+
+    s0, done = init_env(env, init_steps)
+    s0 = downsample84(s0)
+    if random_seed is not None:
+        np.random.seed(seed=random_seed)
+    for i in range(num_steps):
+
+        print 'frame ' + str(i)
+        if done:
+            s0, done = init_env(env, init_steps)
+            s0 = downsample84(s0)
+        if i%1 == 0:
+            # new action
+            a = np.random.randint(env.action_space.n)#env.action_space.sample()
+        s1,r,d,info = env.step(a)
+        s1 = downsample84(s1)
+
+        #s0 = s0[:160,:]
+        #s1 = s1[:160,:]
+
+        frame_pair = FramePair(s0, s1, a, r)
+
+        mover_tracker.process_frame_pair(frame_pair)
+
+        s0 = s1
+
+    with open(mt_filename,'w') as mt_file:
+        cPickle.dump(mover_tracker, mt_file)
+
+    return mover_tracker
 
 # main
 

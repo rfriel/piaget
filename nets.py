@@ -23,6 +23,8 @@ import cv2
 
 from scipy.spatial import distance_matrix
 
+from piaget import *
+
 def local_blob(size):
     blob = np.zeros((size, size))
     middle = (size-1)/2
@@ -231,13 +233,17 @@ class protoQnetwork():
 
 
 class protoModelnetwork():
-    def __init__(self, env, h_size, mover_prototypes, mover_disps,
-                 blob_size, model_name, n_base_movers,
+    def __init__(self, env, game_id, model_name,
+                 blob_size = 1,
                  dueling=True, lr=0.001, eps=1e-3,
                  frame_h = 210, frame_w = 160,
                  mean_reward_pool=None, dists=None):
+
+        self.game_id = game_id
+        self.pt = Prototyper(self.game_id)
+
         self.model_name = model_name
-        self.n_base_movers = n_base_movers
+        self.n_base_movers = self.pt.mt.n_base_movers
         self.blob_size = blob_size
         self.lr = lr
         self.eps = eps
@@ -255,18 +261,18 @@ class protoModelnetwork():
         self.disp_conv_list = []
         self.disp_filter_list = []
 
-        for i, proto in enumerate(mover_prototypes):
+        for i, proto in enumerate(self.pt.mover_prototypes):
             self.mover_conv_list.append(self.get_conv_mover(proto, i))
 
         self.conv_movers = tf.concat(self.mover_conv_list,3)
         self.mover_conv_list_frame1 = [
             self.conv_movers[:,...,2*i+1:2*i+2]
-            for i in range(len(mover_prototypes))]
+            for i in range(len(self.pt.mover_prototypes))]
         self.conv_movers_frame1 = tf.concat(self.mover_conv_list_frame1,3)
 
         self.n_movers = self.conv_movers_frame1.get_shape().as_list()[-1]
 
-        for i, disps in enumerate(mover_disps):
+        for i, disps in enumerate(self.pt.mover_disps):
             self.disp_conv_list.append(self.get_conv_disp(disps, i))
 
         self.conv_disps = tf.concat(self.disp_conv_list,3)
@@ -278,7 +284,7 @@ class protoModelnetwork():
         self.n_disps = self.conv_disps.get_shape().as_list()[-1]
 
         d_id_shift = 0
-        for i, disps in enumerate(mover_disps):
+        for i, disps in enumerate(self.pt.mover_disps):
             self.disp_filter_list.append(self.get_filter_disp(disps, i,
                                                               d_id_shift,
                                                               (11,11)))
@@ -293,7 +299,7 @@ class protoModelnetwork():
         #             tf.stack(
         #                 [channels[ch_ind + m_id_shift] for ch_ind in eq],3),
         #             3))
-        #     m_id_shift += len(mover_disps[m_id])
+        #     m_id_shift += len(self.pt.mover_disps[m_id])
         # self.cd_equiv = tf.concat(eq_tensors,3)
         self.cd_equiv = tf.concat(self.conv_disps,3)
         self.conv_dm = tf.concat([self.cd_equiv,
