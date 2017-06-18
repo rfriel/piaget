@@ -103,6 +103,7 @@ class MoverTracker():
         self.stage = 'init_movement_tracking'
 
         self.n_movers = 0
+        self.n_base_movers = 0
         self.movers = []
         self.frame_pairs = []
         self.action_hist = []
@@ -115,7 +116,7 @@ class MoverTracker():
 
         self.hyperparams = hyperparams
 
-    def process_frame_pair(self, frame_pair):
+    def process_frame_pair(self, frame_pair, base_movers=True):
 
         self.action_hist.append(frame_pair.a)
         self.reward_hist.append(frame_pair.r)
@@ -134,10 +135,10 @@ class MoverTracker():
                     self.movers.append(m)
             else:
                 self.identify_movers()
-            #import pdb; pdb.set_trace()
             self.cur_frame = len(self.frame_pairs)+1
             self.n_movers = len(self.movers)
-
+            if base_movers:
+                self.n_base_movers = self.n_movers
 
     def identify_movers(self):
         cur = self.frame_pairs[-1]
@@ -231,29 +232,29 @@ class TranslationFinder():
         # on just getting it to work.  should simplify and/or add
         # explanatory comments later
 
-        plt.subplot(121)
-        ax = plt.gca()
-        plt.imshow(self.f0,cmap='gray')
-        for cnt_id in range(len(self.cnts)):
-            box = self.cnts_joined[cnt_id]
-            ax.add_patch(patches.Rectangle((box.ll.x, box.ll.y),
-                                    box.width, box.height,
-                                    color='g',
-                                    fill=False)
-            )
-            plt.text(box.ur.x+3, box.ur.y+3, str(cnt_id),color='w')
-        plt.subplot(122)
-        ax = plt.gca()
-        for cnt_id in range(len(self.cnts)):
-            box = self.cnts_joined[cnt_id]
-            ax.add_patch(patches.Rectangle((box.ll.x, box.ll.y),
-                                    box.width, box.height,
-                                    color='g',
-                                    fill=False)
-            )
-            plt.text(box.ur.x+3, box.ur.y+3, str(cnt_id),color='w')
-        plt.imshow(self.f1,cmap='gray')
-        plt.show()
+        # plt.subplot(121)
+        # ax = plt.gca()
+        # plt.imshow(self.f0,cmap='gray')
+        # for cnt_id in range(len(self.cnts)):
+        #     box = self.cnts_joined[cnt_id]
+        #     ax.add_patch(patches.Rectangle((box.ll.x, box.ll.y),
+        #                             box.width, box.height,
+        #                             color='g',
+        #                             fill=False)
+        #     )
+        #     plt.text(box.ur.x+3, box.ur.y+3, str(cnt_id),color='w')
+        # plt.subplot(122)
+        # ax = plt.gca()
+        # for cnt_id in range(len(self.cnts)):
+        #     box = self.cnts_joined[cnt_id]
+        #     ax.add_patch(patches.Rectangle((box.ll.x, box.ll.y),
+        #                             box.width, box.height,
+        #                             color='g',
+        #                             fill=False)
+        #     )
+        #     plt.text(box.ur.x+3, box.ur.y+3, str(cnt_id),color='w')
+        # plt.imshow(self.f1,cmap='gray')
+        # plt.show()
 
         self.cnt_scores = {i: [] for i in range(len(self.cnts))}
         self.cnt_score_params = {i: [] for i in range(len(self.cnts))}
@@ -297,9 +298,9 @@ class TranslationFinder():
                 s = crop_forwards
                 if len(self.all_joins[box_id]) < 3:
 
-                    print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ' Score ' + str(ratio_s)
-                    print 'score_forwards: ' + str(score_forwards) + ', score_backwards: ' + str(score_backwards)
-                    print 'Crop: ' + str(crop_forwards) + ', crop_backwards: ' +  str(crop_backwards) + '\n'
+                    # print 'Join ' + str(self.all_joins[box_id]) + ', Shift ' + str(s) + ' Score ' + str(ratio_s)
+                    # print 'score_forwards: ' + str(score_forwards) + ', score_backwards: ' + str(score_backwards)
+                    # print 'Crop: ' + str(crop_forwards) + ', crop_backwards: ' +  str(crop_backwards) + '\n'
                     '''
                     plt.subplot(121)
                     plt.imshow(box0.img,cmap='gray')
@@ -346,10 +347,10 @@ class TranslationFinder():
         cnt_scores_remaining = self.cnt_scores.copy()
         cnt_score_params_remaining = self.cnt_score_params.copy()
 
-        print '\nStarting . . . \n\n'
+        # print '\nStarting . . . \n\n'
         while len(cnt_scores_remaining) > 0:
-            print 'self.cnt_best_params: ' + str(self.cnt_best_params)
-            print 'len(self.cnts): ' + str(len(self.cnts))
+            # print 'self.cnt_best_params: ' + str(self.cnt_best_params)
+            # print 'len(self.cnts): ' + str(len(self.cnts))
             best_scores_cnts = {k: min(v) \
                                 for k, v in cnt_scores_remaining.iteritems()}
             winning_index = np.argmin(best_scores_cnts.values())
@@ -359,15 +360,12 @@ class TranslationFinder():
             self.cnt_best_scores[winner] = cnt_scores_remaining[winner][winner_best_index]
 
             forbidden_inds = set(self.cnt_best_params[winner][0])
-            print 'winner: ' + str(winner)
-            print 'winner params: ' + str(self.cnt_best_params[winner])
-            print 'winner score: ' + str(self.cnt_best_scores[winner])
-            #print 'forbidden_inds: ' + str(forbidden_inds)
-            #print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
-            #print 'cnt_score_params_remaining :' + str(cnt_score_params_remaining) + '\n'
+            # print 'winner: ' + str(winner)
+            # print 'winner params: ' + str(self.cnt_best_params[winner])
+            # print 'winner score: ' + str(self.cnt_best_scores[winner])
+
             revised_scores = {k: [] for k in cnt_scores_remaining}
             revised_params = {k: [] for k in cnt_score_params_remaining}
-            #import pdb; pdb.set_trace()
             for k in cnt_score_params_remaining:
                 params_k = cnt_score_params_remaining[k]
                 for j, par in enumerate(params_k):
@@ -381,8 +379,6 @@ class TranslationFinder():
             for ind in forbidden_inds:
                 cnt_scores_remaining.pop(ind)
                 cnt_score_params_remaining.pop(ind)
-            #print 'cnt_scores_remaining :' + str(cnt_scores_remaining) + '\n'
-            #print 'cnt_score_params_remaining :' +str(cnt_score_params_remaining) + '\n'
         self.mover_joins = set()
         self.mover_shifts = {}
         self.mover_scores = {}
@@ -409,11 +405,11 @@ class TranslationFinder():
             box0.add_image(self.frame_pair.s0)
             box1.add_image(self.frame_pair.s1)
             self.mover_boxes.append([box0, box1])
-            plt.subplot(121)
-            plt.imshow(box0.img)
-            plt.subplot(122)
-            plt.imshow(box1.img)
-            plt.show()
+            # plt.subplot(121)
+            # plt.imshow(box0.img)
+            # plt.subplot(122)
+            # plt.imshow(box1.img)
+            # plt.show()
 
         return self.mover_boxes
 
@@ -607,6 +603,7 @@ def play(num_steps, env, img_dir, mt_dir, init_steps, \
         np.random.seed(seed=random_seed)
     for i in range(num_steps):
 
+        print 'frame ' + str(i)
         if done:
             s0, done = init_env(env, init_steps)
             s0 = downsample84(s0)
@@ -629,6 +626,94 @@ def play(num_steps, env, img_dir, mt_dir, init_steps, \
         cPickle.dump(mover_tracker, mt_file)
 
     return mover_tracker
+
+class Prototyper():
+    def __init__(self, game_id):
+        self.game_id = game_id
+        self.mt_dir = 'mt/' + str(self.game_id) + '/'
+        self.mt_filename = self.mt_dir + 'mt.pkl'
+        with open(self.mt_filename) as f:
+            self.mt = cPickle.load(f)
+        self.img_dir = self.mt.img_dir
+        self.mover_dirs = [self.img_dir + d + '/'
+                      for d in os.listdir(self.img_dir)
+                      if d.find('mover') == 0]
+
+        self.excluded_ids = set()
+
+        # disps
+        self.mover_ids = []
+        self.mover_disps = {}
+        for m in self.mt.movers:
+            mover_id = m.id
+            self.mover_ids.append(mover_id)
+            traj = m.trajectory
+            disp_boxes = [(t1[1]-t0[1])/(t1[0]-t0[0])
+                          for t1, t0 in zip(traj[1:],traj[:-1])]
+            disp_pts = [(b.ll + b.ur)/2 for b in disp_boxes]
+            disp_unique = {d.to_tuple() for d in disp_pts}
+            if len(disp_unique) == 0:
+                disp_unique.add((0,0))
+            disp_unique_ints = [(int(d1), int(d2)) for d1, d2 in disp_unique\
+                               if True]#int(d1) != 0 or int(d2) != 0]
+            disp_unique_ints = self.symmetrize_disps(disp_unique_ints)
+            print disp_unique_ints
+
+            self.mover_disps[mover_id] = disp_unique_ints
+            if len(disp_unique_ints) == 0:
+                excluded_ids.add(mover_id)
+
+        # prototypes
+        self.mover_prototypes = {}
+
+        for mover_dir in self.mover_dirs:
+            mover_id = int(mover_dir[mover_dir.find('mover')+5:-1])
+            list_images = [mover_dir+f
+                           for f in os.listdir(mover_dir) if re.search('jpg|JPG', f)]
+            mover_images = []
+            for image in list_images:
+                im = np.array(Image.open(image))
+                mover_images.append(im)
+
+            n_im = len(mover_images)
+            prototypes = [mover_images[i] for i in range(n_im)]
+            proto_vars = [np.var(p.flatten()) for p in prototypes]
+            not_blank = [i for i in range(n_im) if proto_vars[i] > 0]
+            if len(not_blank) == 0:
+                #all blank
+                self.excluded_ids.add(mover_id)
+                img_id = np.random.randint(n_im)
+                self.mover_prototypes[mover_id] = prototypes[img_id]
+            else:
+                proto = prototypes[np.random.choice(not_blank)]
+                self.mover_prototypes[mover_id] = proto
+
+        # remove exact duplicates
+        for i, p1 in enumerate(self.mover_prototypes.values()):
+            for j, p2 in enumerate(self.mover_prototypes.values()):
+                if p1.shape == p2.shape:
+                    if np.var(p2-p1) == 0 and j > i:
+                        self.excluded_ids.add(self.mover_prototypes.keys()[j])
+
+        ids = self.mover_prototypes.keys()
+
+        self.mover_prototypes = [self.mover_prototypes[id] for id in ids
+                            if id not in self.excluded_ids]
+        self.mover_disps = [self.mover_disps[id] for id in ids
+                            if id not in self.excluded_ids]
+
+        self.all_disps = reduce(lambda a,b: list(a)+list(b), self.mover_disps)
+        self.all_disps_neg = [(-d[0], -d[1]) for d in self.all_disps]
+
+    def symmetrize_disps(self, disps):
+        symm_disps = set()
+        for disp in disps:
+            symm_disps.add(disp)
+            if (disp[0] != 0) or (disp[1] != 0):
+                symm_disps.add((-disp[0],disp[1]))
+                symm_disps.add((disp[0],-disp[1]))
+                symm_disps.add((-disp[0],-disp[1]))
+        return list(symm_disps)
 
 # main
 
