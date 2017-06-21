@@ -561,15 +561,18 @@ class Prototyper():
             n_im = len(mover_images)
             prototypes = [mover_images[i] for i in range(n_im)]
             proto_vars = [np.var(p.flatten()) for p in prototypes]
-            not_blank = [i for i in range(n_im) if proto_vars[i] > 0]
+            not_blank = [prototypes[i] for i in range(n_im)
+                         if proto_vars[i] > 0]
+            not_blank_vars = [np.var(p.flatten()) for p in not_blank]
             if len(not_blank) == 0:
                 #all blank
                 self.excluded_ids.add(mover_id)
                 img_id = np.random.randint(n_im)
                 self.mover_prototypes[mover_id] = prototypes[img_id]
             else:
-                proto = prototypes[np.random.choice(not_blank)]
-                self.mover_prototypes[mover_id] = proto
+                variance_inds = np.argsort(not_blank_vars)
+                img_id = variance_inds[len(not_blank_vars)//2]
+                self.mover_prototypes[mover_id] = prototypes[img_id]
 
         # remove exact duplicates
         for i, p1 in enumerate(self.mover_prototypes.values()):
