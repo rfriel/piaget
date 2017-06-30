@@ -29,6 +29,8 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from itertools import combinations, product
 
+from collections import OrderedDict
+
 # classes
 
 class Point():
@@ -533,18 +535,19 @@ class Prototyper():
             traj = m.trajectory
             disp_boxes = [(t1[1]-t0[1])/(t1[0]-t0[0])
                           for t1, t0 in zip(traj[1:],traj[:-1])]
-            disp_pts = [(b.ll + b.ur)/2 for b in disp_boxes]
-            disp_unique = {d.to_tuple() for d in disp_pts}
+            disp_pts = [((b.ll + b.ur)/2).to_tuple() for b in disp_boxes]
+            disp_unique = OrderedDict()
+            for d in disp_pts:
+                disp_unique[d] = 0
             if len(disp_unique) == 0:
-                disp_unique.add((0,0))
-            disp_unique_ints = [(int(d1), int(d2)) for d1, d2 in disp_unique\
-                               if True]#int(d1) != 0 or int(d2) != 0]
-            disp_unique_ints = self.symmetrize_disps(disp_unique_ints)
-            print disp_unique_ints
+                disp_unique[(0,0)] = 0
+            disp_unique = self.symmetrize_disps(disp_unique.keys())
+            disp_unique_ints = [(int(d1), int(d2)) for d1, d2 in disp_unique.keys()\
+                               if int(d1) != 0 or int(d2) != 0]
 
             self.mover_disps[mover_id] = disp_unique_ints
             if len(disp_unique_ints) == 0:
-                excluded_ids.add(mover_id)
+                self.excluded_ids.add(mover_id)
 
         # prototypes
         self.mover_prototypes = {}
@@ -566,13 +569,15 @@ class Prototyper():
             not_blank_vars = [np.var(p.flatten()) for p in not_blank]
             if len(not_blank) == 0:
                 #all blank
+                print 'all blank for id %d' % mover_id
                 self.excluded_ids.add(mover_id)
                 img_id = np.random.randint(n_im)
                 self.mover_prototypes[mover_id] = prototypes[img_id]
             else:
                 variance_inds = np.argsort(not_blank_vars)
                 img_id = variance_inds[len(not_blank_vars)//2]
-                self.mover_prototypes[mover_id] = prototypes[img_id]
+                print 'choosing var %f for id %d' % (not_blank_vars[img_id], mover_id)
+                self.mover_prototypes[mover_id] = not_blank[img_id]
 
         # remove exact duplicates
         for i, p1 in enumerate(self.mover_prototypes.values()):
@@ -583,23 +588,35 @@ class Prototyper():
 
         ids = self.mover_prototypes.keys()
 
-        self.mover_prototypes = [self.mover_prototypes[id] for id in ids
-                            if id not in self.excluded_ids]
-        self.mover_disps = [self.mover_disps[id] for id in ids
-                            if id not in self.excluded_ids]
+        self.mover_ids = [m_id for m_id in ids
+                            if m_id not in self.excluded_ids]
+        self.mover_prototypes = [self.mover_prototypes[m_id] for m_id in ids
+                            if m_id not in self.excluded_ids]
+        self.mover_disps = [self.mover_disps[m_id] for m_id in ids
+                            if m_id not in self.excluded_ids]
 
         self.all_disps = reduce(lambda a,b: list(a)+list(b), self.mover_disps)
         self.all_disps_neg = [(-d[0], -d[1]) for d in self.all_disps]
 
+        for m_id, disps in zip(self.mover_ids, self.mover_disps):
+            print m_id, disps
+
+        self.mt.n_base_movers = len(self.mover_ids)
+
     def symmetrize_disps(self, disps):
-        symm_disps = set()
-        for disp in disps:
-            symm_disps.add(disp)
-            if (disp[0] != 0) or (disp[1] != 0):
-                symm_disps.add((-disp[0],disp[1]))
-                symm_disps.add((disp[0],-disp[1]))
-                symm_disps.add((-disp[0],-disp[1]))
-        return list(symm_disps)
+        symm_disps = OrderedDict()
+        for raw_disp in disps:
+            rounded_disps = [(np.floor(raw_disp[0]), np.floor(raw_disp[1])),
+                             (np.ceil(raw_disp[0]), np.floor(raw_disp[1])),
+                             (np.floor(raw_disp[0]), np.ceil(raw_disp[1])),
+                             (np.ceil(raw_disp[0]), np.ceil(raw_disp[1]))]
+            for disp in rounded_disps:
+                symm_disps[disp] = 0
+                if (disp[0] != 0) or (disp[1] != 0):
+                    symm_disps[(-disp[0],disp[1])] = 0
+                    symm_disps[(disp[0],-disp[1])] = 0
+                    symm_disps[(-disp[0],-disp[1])] = 0
+        return symm_disps
 
 
 # functions: gym
@@ -608,7 +625,7 @@ def init_env(env,n_steps):
     env.reset()
     # e.g. nothing happens in first 100 steps of ms pacman
     for i in range(n_steps):
-        s,r,d,info = env.step(env.action_space.sample()) # take a random action
+        s,r,d,info = env.step(np.random.randint(env.action_space.n)) # take a random action
     return s,d
 
 # functions: running the AI
@@ -651,9 +668,6 @@ def play(num_steps, env, img_dir, mt_dir, init_steps, \
             a = np.random.randint(env.action_space.n)#env.action_space.sample()
         s1,r,d,info = env.step(a)
         s1 = downsample84(s1)
-
-        #s0 = s0[:160,:]
-        #s1 = s1[:160,:]
 
         frame_pair = FramePair(s0, s1, a, r)
 
