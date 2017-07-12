@@ -1,7 +1,7 @@
 # piaget
 Visual reinforcement learner with "developmental stages"
 
-Note: This is a personal project which is currently in the "trying lots of experiments to find out what works" stage.  The experimentation takes place in the Juypter Notebook files, while experimental code that works well enought to keep and build upon goes in the Python files.  This README doesn't intend to make everything in the code comprehensible (since I am continually changing it), but tries to explain the general idea and the components which are relatively well established (as of 6/18/17).
+Note: This is a personal project which is currently in the "trying lots of experiments to find out what works" stage.  The experimentation takes place in the Juypter Notebook files, while experimental code that works well enought to keep and build upon goes in the Python files.  This README doesn't intend to make everything in the code comprehensible (since I am continually changing it), but tries to explain the general idea and the components which are relatively well established (as of 7/12/17).
 
 ##  Motivation
 
@@ -33,9 +33,27 @@ Let's be a lot more concrete.  If I sit down to play an Atari game I've never se
 
 If you start with the not-especially-strong, physically motivated assumption that *moving things are persistent and important*, you can immediately extract a lot of information from the first few frames of an Atari game.  Take the difference between frames and identify the (typically small) regions where something has changed.  These usually correspond to moving objects (sprites).  Track which regions have similar positions as time elapses, take snapshots of those regions and apply some basic computer vision to them, and you've got reliable images of the most significant moving objects in the game, plus a sample trajectory for each one -- within as few as 5, 10, or 15 frames.  Use the snapshots to initialize the first layer of a ConvNet, and the observed motions to initialize the second layer, and after 15 frames you've got a set of filters that pinpoint the most important things in the game.  All of this assumes a fair amount about the visual/spatial structure of the environment -- but then, so do ConvNets alone.
 
+## Piaget
+
+Piaget is an attempt to apply the above ideas to the Atari environments in the [OpenAI Gym](http://gym.openai.com/).
+
+Piaget currently has two basic "developmental stages":
+
+1. A stage that uses traditional computer vision (with OpenCV) to identify moving objects in the game.
+
+2. A stage that trains a ConvNet-based model, in which the first two layers contain fixed (non-trainable) filters based on information extracted in Stage 1.
+
+Typically, I will run Stage 1 for somewhere in the range of 10-50 frames, then move on to Stage 2.  (Because Stage 1 isn't perfect at recognizing when things seen on different frames are the same type of object, it will tend to accumulate spurious copies of the same object type if run for too long, which pointlessly makes the ConvNet bigger.  In principle, it should be possible to avoid this by improving Stage 1, but while I'm testing the feasibility of the whole thing, it's easier just to run Stage 1 for fewer frames, at the cost of sometimes missing an object type.)
+
+I'll now describe the two stages in more detail.
+
+### Stage 1: Movers
+
+### Stage 2: Nets
+
 ***
 
-Work in progress.  Designed for visual environments from the [OpenAI Gym](http://gym.openai.com/), like Atari games.  The central idea is to write a learner that "crawls before it can walk," e.g. figures out some basic things about the visual environment (what types of moving things are there, which can it control) first, then leverages that information to learn about the state and reward dynamics, etc.
+Work in progress.  Designed for visual environments from the , like Atari games.  The central idea is to write a learner that "crawls before it can walk," e.g. figures out some basic things about the visual environment (what types of moving things are there, which can it control) first, then leverages that information to learn about the state and reward dynamics, etc.
 
 Once a certain amount of information has been obtained, I'll probably use it to estimate values in something like Q-learning, and perhaps add a generic CNN that tries to correct for what this information misses.  I'm curious whether this approach will have some advantages over doing deep Q-learning from scrach, by leveraging some properties that first-time human players assume from background experience (visual states contain persistent objects, changes are composed of local object motions, the player can directly control some objects and not others).
 
