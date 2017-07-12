@@ -22,11 +22,11 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-import trackpy as tp
-from trackpy.predict import NearestVelocityPredict
+# import trackpy as tp
+# from trackpy.predict import NearestVelocityPredict
 import pandas as pd
 
-from sklearn.linear_model import LogisticRegression
+# from sklearn.linear_model import LogisticRegression
 from itertools import combinations, product
 
 from collections import OrderedDict
@@ -113,8 +113,8 @@ class MoverTracker():
 
         self.cur_frame = 0
 
-        self.tp_link = pd.DataFrame()
-        self.tp_pred = NearestVelocityPredict()
+        #self.tp_link = pd.DataFrame()
+        #self.tp_pred = NearestVelocityPredict()
 
         self.hyperparams = hyperparams
 
@@ -181,7 +181,7 @@ class FramePair():
         fd_grey = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
         thresh = cv2.threshold(fd_grey,1,255,cv2.THRESH_BINARY)[1]
         thresh_dilated = cv2.dilate(thresh,None,iterations=1)
-        (_, cnts, _) = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        cnts, _ = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
         self.finder = TranslationFinder(self, thresh_dilated, cnts)
         self.mover_boxes = self.finder.find_translations()
@@ -269,9 +269,8 @@ class TranslationFinder():
 
             box0_1channel = np.expand_dims(box0.img,2)
             box1_1channel = np.expand_dims(box1.img,2)
-            #import pdb; pdb.set_trace()
 
-            pc = cv2.phaseCorrelate(box0.img,box1.img)[0]
+            pc = cv2.phaseCorrelate(box0.img,box1.img)
             eight_shifts = [[np.floor(pc[1]),np.floor(pc[0])],\
                            [np.ceil(pc[1]),np.floor(pc[0])],\
                            [np.floor(pc[1]),np.ceil(pc[0])],\
@@ -621,11 +620,16 @@ class Prototyper():
 
 # functions: gym
 
-def init_env(env,n_steps):
+def init_env(env, n_steps, breakout):
     env.reset()
     # e.g. nothing happens in first 100 steps of ms pacman
     for i in range(n_steps):
-        s,r,d,info = env.step(np.random.randint(env.action_space.n)) # take a random action
+        if breakout and i == 0:
+            # requesting ball in breakout
+            a = 1
+        else:
+            a = np.random.randint(env.action_space.n)
+        s,r,d,info = env.step(a) # take a random action
     return s,d
 
 # functions: running the AI
@@ -633,8 +637,9 @@ def init_env(env,n_steps):
 def downsample84(s):
     return s#np.array(Image.fromarray(s).resize((84,84)))
 
-def play(num_steps, env, img_dir, mt_dir, init_steps, \
-         random_seed = None,\
+def play(num_steps, env, img_dir, mt_dir, init_steps,
+         random_seed = None,
+         breakout=False,
          hyperparams={'force_square': False,
             'tp_part_size': 11,
             'tp_max_disp': 21,
@@ -653,19 +658,19 @@ def play(num_steps, env, img_dir, mt_dir, init_steps, \
 
     mover_tracker = MoverTracker(game_id, img_dir, hyperparams)
 
-    s0, done = init_env(env, init_steps)
+    s0, done = init_env(env, init_steps, breakout)
     s0 = downsample84(s0)
     if random_seed is not None:
         np.random.seed(seed=random_seed)
     for i in range(num_steps):
 
-        print 'frame ' + str(i)
+        #print 'frame ' + str(i)
         if done:
             s0, done = init_env(env, init_steps)
             s0 = downsample84(s0)
-        if i%1 == 0:
-            # new action
-            a = np.random.randint(env.action_space.n)#env.action_space.sample()
+
+        # new action
+        a = np.random.randint(env.action_space.n)#env.action_space.sample()
         s1,r,d,info = env.step(a)
         s1 = downsample84(s1)
 
