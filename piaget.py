@@ -10,7 +10,8 @@ import os
 
 import cv2
 
-import pdb
+from IPython.core.debugger import Pdb
+
 from time import sleep
 import re
 import cPickle
@@ -30,6 +31,13 @@ import pandas as pd
 from itertools import combinations, product
 
 from collections import OrderedDict
+
+import matplotlib.colors as mcolors
+box_colors_rgb = np.array([mcolors.hex2color(v) for v in mcolors.cnames.values()]).reshape((1,147, 3))
+box_colors_hsv = mcolors.rgb_to_hsv(box_colors_rgb)
+good_indices = (box_colors_hsv[0][:,1] > 0.5) & (box_colors_hsv[0][:,2] < 0.8)
+
+box_colors = box_colors_rgb[0][good_indices]
 
 # classes
 
@@ -93,8 +101,8 @@ class Mover():
         try:
             img_for_save = Image.fromarray(box.img)
         except ValueError:
-            import pdb; pdb.set_trace()
-        img_for_save.save(self.img_dir + 'frame' + str(cur_frame) + '.jpg')
+            pdb.set_trace()
+        img_for_save.save(self.img_dir + 'frame' + str(cur_frame) + '.png')
 
 class MoverTracker():
     def __init__(self, game_id, img_dir, hyperparams, debug=False):
@@ -338,7 +346,7 @@ class TranslationFinder():
 
 
             #if (len(self.cnts) > 2) and (len(self.all_joins[box_id]) > 1):
-                #import pdb; pdb.set_trace()
+                #pdb.set_trace()
 
             for ind in self.all_joins[box_id]:
                 self.cnt_scores[ind].append(best_ratio)
@@ -494,14 +502,17 @@ class TranslationFinder():
                 f0_crop = f0[max(-crop[0],0):w-max(crop[0],0),\
                          max(-crop[1],0):h-max(crop[1],0)]
             except TypeError:
-                import pdb; pdb.set_trace()
+                pdb.set_trace()
             f1_crop = f1[max(-n_crop[0],0):w-max(n_crop[0],0),\
                          max(-n_crop[1],0):h-max(n_crop[1],0)]
 
             gt_crop = gt[max(-n_crop[0],0):w-max(n_crop[0],0),\
                          max(-n_crop[1],0):h-max(n_crop[1],0)]
 
-            var_crop = ((f1_crop + gt_crop).flatten()**2).var()
+            try:
+                var_crop = ((f1_crop + gt_crop).flatten()**2).var()
+            except RuntimeWarning:
+                var_crop = 0.
             four_scores.append(var_crop)
         best_index = np.argmax(four_scores)
         return err, four_crops[best_index]
@@ -554,7 +565,7 @@ class Prototyper():
         for mover_dir in self.mover_dirs:
             mover_id = int(mover_dir[mover_dir.find('mover')+5:-1])
             list_images = [mover_dir+f
-                           for f in os.listdir(mover_dir) if re.search('jpg|JPG', f)]
+                           for f in os.listdir(mover_dir) if re.search('png', f)]
             mover_images = []
             for image in list_images:
                 im = np.array(Image.open(image))
