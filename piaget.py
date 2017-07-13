@@ -677,7 +677,7 @@ def play(num_steps, env, img_dir, mt_dir, init_steps,
 
         #print 'frame ' + str(i)
         if done:
-            s0, done = init_env(env, init_steps)
+            s0, done = init_env(env, init_steps, breakout)
             s0 = downsample84(s0)
 
         # new action
