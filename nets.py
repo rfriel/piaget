@@ -632,7 +632,7 @@ class protoModelnetwork():
                               )
             self.biases = tf.get_variable(name='bias',shape=(2),
                                     initializer=tf.constant_initializer(
-                                        -1.))
+                                        -0.9))
             self.bias = tf.nn.bias_add(self.conv, self.biases)
             self.conv_p0 = tf.nn.relu(self.bias)
             self.conv_p0 = tf.cast(self.conv_p0>0.,'float32')

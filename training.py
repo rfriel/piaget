@@ -413,8 +413,12 @@ def train_protoModelNetwork(env, pt, breakout=False,
             print("Saved Model")
         print_rate = 1
         if len(rList) % print_rate == 0 and total_steps > pre_train_steps:
-            print(total_steps, buffer_pushes, (32)*np.mean(frame_err_list[-batch_size*100:,:]))
-            for _ in range(2):
+            print 'total_steps: %d' % total_steps
+            print 'mean log loss (last 100 training frames): %d ' %
+            (total_steps, np.mean(frame_err_list[-batch_size*100:,:]))
+            n_example_frames = 2
+            print 'Displaying model performance on %d random frames from buffer...'  % n_example_frames
+            for _ in range(n_example_frames):
                 displayBatch = myBuffer.sample(1, attention=False)
                 target_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
                 pred_pool = sess.run(mainQN.pred_pool,\
@@ -434,18 +438,21 @@ def train_protoModelNetwork(env, pt, breakout=False,
 
 
                 #print(total_steps, np.mean(reference_err_list[-100:]), np.mean(frame_err_list[-100:]))
-                print('action: ', displayBatch[0][1],
-                     'old_action: ', displayBatch[0][5])
+                print 'action: %d, previous action: %d' % (displayBatch[0][1],
+                                                           displayBatch[0][5])
 
                 plt.figure(figsize=(12,4))
                 s0 = np.reshape(displayBatch[0,0],(frame_h,160,6))
                 s1 = np.reshape(displayBatch[0,3],(frame_h,160,6))
                 plt.subplot(131)
                 plt.imshow(s0[:,:,3:] - s0[:,:,:3])
+                plt.title('Difference');
                 plt.subplot(132)
                 plt.imshow(s0[:,:,:3])
+                plt.title('First frame');
                 plt.subplot(133)
                 plt.imshow(s0[:,:,3:])
+                plt.title('Second frame');
 
                 i_max = target_pool.shape[3]
                 j_max = 5
@@ -584,7 +591,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                 plt.figure()
 
                 for m_id in range(frame_err_list.shape[1]):
-                    sqMat = np.resize((32)*frame_err_list[:,m_id],
+                    sqMat = np.resize(frame_err_list[:,m_id],
                                       [frame_err_list.shape[0]//avg_window,
                                                        avg_window])
                     QsqAvgs = np.average(sqMat,1)

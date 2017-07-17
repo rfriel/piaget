@@ -33,11 +33,16 @@ from itertools import combinations, product
 from collections import OrderedDict
 
 import matplotlib.colors as mcolors
-box_colors_rgb = np.array([mcolors.hex2color(v) for v in mcolors.cnames.values()]).reshape((1,147, 3))
+box_colors_rgb = np.array([mcolors.hex2color(v) for v in mcolors.cnames.values()])
+box_colors_rgb = box_colors_rgb.reshape((1,box_colors_rgb.shape[0],3))
 box_colors_hsv = mcolors.rgb_to_hsv(box_colors_rgb)
 good_indices = (box_colors_hsv[0][:,1] > 0.5) & (box_colors_hsv[0][:,2] < 0.8)
 
 box_colors = box_colors_rgb[0][good_indices]
+
+# catching a numpy runtime warning -- make this specific to RuntimeWarning?
+import warnings
+warnings.filterwarnings('error')
 
 # classes
 
@@ -189,7 +194,7 @@ class FramePair():
         fd_grey = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
         thresh = cv2.threshold(fd_grey,1,255,cv2.THRESH_BINARY)[1]
         thresh_dilated = cv2.dilate(thresh,None,iterations=1)
-        cnts, _ = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        _, cnts, _ = cv2.findContours(thresh_dilated.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
         self.finder = TranslationFinder(self, thresh_dilated, cnts)
         self.mover_boxes = self.finder.find_translations()
@@ -278,7 +283,7 @@ class TranslationFinder():
             box0_1channel = np.expand_dims(box0.img,2)
             box1_1channel = np.expand_dims(box1.img,2)
 
-            pc = cv2.phaseCorrelate(box0.img,box1.img)
+            pc = cv2.phaseCorrelate(box0.img,box1.img)[0]
             eight_shifts = [[np.floor(pc[1]),np.floor(pc[0])],\
                            [np.ceil(pc[1]),np.floor(pc[0])],\
                            [np.floor(pc[1]),np.ceil(pc[0])],\
