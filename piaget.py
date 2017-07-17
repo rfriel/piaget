@@ -586,7 +586,7 @@ class Prototyper():
             else:
                 variance_inds = np.argsort(not_blank_vars)
                 img_id = variance_inds[len(not_blank_vars)//2]
-                print 'choosing var %f for id %d' % (not_blank_vars[img_id], mover_id)
+                #print 'choosing var %f for id %d' % (not_blank_vars[img_id], mover_id)
                 self.mover_prototypes[mover_id] = not_blank[img_id]
 
         # remove exact duplicates
@@ -608,8 +608,8 @@ class Prototyper():
         self.all_disps = reduce(lambda a,b: list(a)+list(b), self.mover_disps)
         self.all_disps_neg = [(-d[0], -d[1]) for d in self.all_disps]
 
-        for m_id, disps in zip(self.mover_ids, self.mover_disps):
-            print m_id, disps
+        # for m_id, disps in zip(self.mover_ids, self.mover_disps):
+        #     print m_id, disps
 
         self.mt.n_base_movers = len(self.mover_ids)
 

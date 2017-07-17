@@ -25,6 +25,9 @@ from scipy.spatial import distance_matrix
 
 from piaget import *
 
+# note: much of this code is adapted from Arthur Juliani's DQN code
+# see README and demo notebook for details
+
 def local_blob(size):
     blob = np.zeros((size, size))
     middle = (size-1)/2
@@ -32,6 +35,8 @@ def local_blob(size):
         for j in range(size):
             blob[i,j] = 1.#/(1+((i-middle)**2 + (j-middle)**2))
     return blob
+
+# this needs work -- focusing on protoModelnetwork for now
 
 class protoQnetwork():
     def __init__(self, env, h_size, mover_prototypes, mover_disps,
