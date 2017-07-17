@@ -1,7 +1,9 @@
 # piaget
 Visual reinforcement learner with "developmental stages"
 
-Note: This is a personal project which is currently in the "trying lots of experiments to find out what works" stage.  The experimentation takes place in the Juypter Notebook files, while experimental code that works well enought to keep and build upon goes in the Python files.  This README doesn't intend to make everything in the code comprehensible (since I am continually changing it), but tries to explain the general idea and the components which are relatively well established (as of 7/12/17).
+Note: This is a personal project which is currently in the "trying lots of experiments to find out what works" stage.  The experimentation takes place in the Juypter Notebook files, while experimental code that works well enought to keep and build upon goes in the Python files.  This README doesn't intend to make everything in the code comprehensible (since I am continually changing it), but tries to explain the general idea and the components which are relatively well established (as of 7/17/17).
+
+The first section below, [Motivation](#motivation), describes the ideas about deep reinforcement learning that inspired this experiment.  If you're looking for what the code actually does, see the second section, [Piaget](#piaget-1), and the demo notebook, `piaget_demo.ipynb`.  (The demo notebook provides a better introduction than can be done in text, so I recommend checking it out.)
 
 ##  Motivation
 
@@ -48,6 +50,8 @@ Typically, I will run Stage 1 for somewhere in the range of 10-50 frames, then m
 I'll now describe the two stages in more detail.
 
 ### Stage 1: Movers
+
+
 
 ### Stage 2: Nets
 
