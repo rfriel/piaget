@@ -414,11 +414,11 @@ def train_protoModelNetwork(env, pt, breakout=False,
         print_rate = 1
         if len(rList) % print_rate == 0 and total_steps > pre_train_steps:
             print 'total_steps: %d' % total_steps
-            print 'mean log loss (last 100 training frames): %d ' %
-            (total_steps, np.mean(frame_err_list[-batch_size*100:,:]))
+            print 'mean log loss (last 100 training frames): %d ' % \
+            np.mean(frame_err_list[-batch_size*100:,:])
             n_example_frames = 2
-            print 'Displaying model performance on %d random frames from buffer...'  % n_example_frames
-            for _ in range(n_example_frames):
+            print '\nDisplaying model performance on %d random frames from buffer...\n'  % n_example_frames
+            for example_frame_ind in range(n_example_frames):
                 displayBatch = myBuffer.sample(1, attention=False)
                 target_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
                 pred_pool = sess.run(mainQN.pred_pool,\
@@ -437,7 +437,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                                                 mainQN.old_actions:displayBatch[:,5]})
 
 
-                #print(total_steps, np.mean(reference_err_list[-100:]), np.mean(frame_err_list[-100:]))
+                print "Example frame %d" % example_frame_ind
                 print 'action: %d, previous action: %d' % (displayBatch[0][1],
                                                            displayBatch[0][5])
 
@@ -453,10 +453,12 @@ def train_protoModelNetwork(env, pt, breakout=False,
                 plt.subplot(133)
                 plt.imshow(s0[:,:,3:])
                 plt.title('Second frame');
+                plt.show()
 
                 i_max = target_pool.shape[3]
                 j_max = 5
                 for ii in range(i_max):
+                    print '\nShowing region near mover %d...\n' % pt.mover_ids[ii]
                     target_img = (target_pool[0,:,:,ii]>0.)
                     pred_img = pred_pool[0,:,:,ii]
                     previous_img = (previous_pool[0,:,:,ii]>0.)
@@ -491,6 +493,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                     plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                    plt.title('First frame')
 
                     plt.figure(figsize=(12,2*2))
                     plt.subplot(151)
@@ -500,6 +503,8 @@ def train_protoModelNetwork(env, pt, breakout=False,
                     plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                    plt.title('Second frame')
+
                     plt.subplot(152)
                     plt.imshow(s1[vis_center[0]-5:vis_center[0]+5,
                                   vis_center[1]-5:vis_center[1]+5,3:],
@@ -507,6 +512,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                     plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                     plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                    plt.title('Third frame')
                     plt.show()
 
                     plt.figure(figsize=(12,2*i_max))
@@ -519,6 +525,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Truth (2nd frame)')
 
                         plt.subplot(i_max,j_max,3*jj+(ii*j_max)+2)
                         plt.imshow(target_img,cmap='gray',interpolation='nearest',
@@ -526,6 +533,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Truth (3rd frame)')
 
                         plt.subplot(i_max,j_max,3*jj+(ii*j_max)+3)
                         plt.imshow(softmax20(pred_img),cmap='gray',interpolation='nearest',
@@ -533,6 +541,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Model (3rd frame)')
 
                         plt.subplot(i_max,j_max,3*jj+(ii*j_max)+4)
                         plt.imshow(predV_img,cmap='gray',interpolation='nearest',
@@ -540,6 +549,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Model logits (value)')
 
                         plt.subplot(i_max,j_max,3*jj+(ii*j_max)+5)
                         plt.imshow(predA_img,cmap='gray',interpolation='nearest',
@@ -547,14 +557,17 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         plt.xticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.yticks(np.linspace(-0.5,9.5,11),range(10))
                         plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Model logits (action)')
+                        plt.show()
 
-                        print(np.max(previous_img),np.max(target_img),softmax20(pred_img[5,5]))
+                        print 'Probability assigned to true location: %f\n' \
+                        % softmax20(pred_img[5,5])
 
                         dcl = sess.run(mainQN.disp_conv_list,\
                          feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
                                     mainQN.actions:displayBatch[:,1],
                                     mainQN.old_actions:displayBatch[:,5]})
-                plt.show()
+                #plt.show()
 
                 if n_free > 0:
                     fk = sess.run(mainQN.free_kernels,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
@@ -586,7 +599,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
     #                         plt.imshow(fk_img,cmap='gray',interpolation='nearest')
                     plt.show()
 
-            avg_window = batch_size*300
+            avg_window = batch_size*100
             if frame_err_list.shape[0] > 3*avg_window:
                 plt.figure()
 
@@ -596,9 +609,14 @@ def train_protoModelNetwork(env, pt, breakout=False,
                                                        avg_window])
                     QsqAvgs = np.average(sqMat,1)
                     q95 = np.percentile(sqMat,95,1)
-                    plt.plot(QsqAvgs[1:],label=('mean ' + str(m_id)))
-                    plt.plot(q95[1:],label=('95% ' + str(m_id)))
-                plt.show()
+                    plt.plot(QsqAvgs[1:],label='mean')
+                    plt.plot(q95[1:],label='95%')
+                    plt.xlabel('Batches/{0}'.format(avg_window // batch_size))
+                    plt.ylabel('Log loss')
+                    plt.title('Learning curves, mover {0}'
+                              .format(pt.mover_ids[m_id]))
+                    plt.legend()
+                    plt.show()
 
     saver.save(sess,path+'/model-'+str(i)+'.cptk')
 
