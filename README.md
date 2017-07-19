@@ -55,6 +55,8 @@ Stage 1 is implemented by the `play` function, which is mostly a wrapper for the
 
 The `MoverTracker` class assembles each pair of observed frames into a `FramePair` object.  (These overlap: we will have a pair for frames 0 and 1, a separate pair for 1 and 2, etc.)  Each time we assemble a new pair of frames, we take the arithmetic difference of the two, which eliminates the background, and do additional processing to find moving objects.  This processing is handled by the `FramePair` object itself and by a `TranslationFinder` object it creates and owns (mostly by the latter).
 
+#### Processing frame pairs
+
 First, the frame difference is converted to grayscale, thresholded to black-and-white, and put through OpenCV's `dilate` function to fill in small gaps.  I then use OpenCV's `findContours` and `boundingRect` to find bounding boxes for the distinct white areas in this image, which generally correspond to disjoint edges of moving objects.
 
 Next, I extend the list of bounding boxes to cover all *unions* of the bounding boxes.  This is useful because a large, flatly colored object may show up in the frame difference as several disjoint edges around an invisible middle, and in this case we need a box big enough to contain the whole thing.
@@ -79,8 +81,11 @@ But knowing the translation, we can appropriately crop each frame's box, isolati
 
 ![](readme_images/boxes_cropped.png)
 
+#### Assembling mover histories
 
-The process just described finds movers on an individual frame pair.  The `MoverTracker` handles the task of linking these together to find persistent entities.  Each of these persistent entities is represented by an object of the `Mover` class.  If we're tracking things perfectly, the linking process should be easy: frame pair (*n-1*, *n*) gives us the mover's bounding boxes on frames *n-1* and *n*, and when we process frame pair (*n*, *n+1*), we should find the exact same bounding box for frame *n* if we're indeed tracking at the same mover.  For various reasons, this doesn't always happen (non-constant backgrounds, collisions, movers that change appearance), and so I fudge it a bit by allowing the box centers to differ by up to 2 pixels (in Euclidean distance).  Even with this fudging, Piaget *still* tends to err on the side of inventing too many movers.  (Thankfully, we can often get all or many of the movers and displacements in a game before too many of these duplicates pile up, and then proceed to Stage 2.)
+The process just described finds movers on an individual frame pair.  The `MoverTracker` handles the task of linking these together to find persistent entities.  Each of these persistent entities is represented by an object of the `Mover` class.  If we're tracking things perfectly, the linking process should be easy: frame pair (*n-1*, *n*) gives us the mover's bounding boxes on frames *n-1* and *n*, and when we process frame pair (*n*, *n+1*), we should find the exact same bounding box for frame *n* if we're indeed tracking the same mover.  For various reasons, this doesn't always happen (non-constant backgrounds, collisions, movers that change appearance), and so I fudge it a bit by allowing the box centers to differ by up to 2 pixels (in Euclidean distance).  Even with this fudging, Piaget *still* tends to err on the side of inventing too many movers.  (Thankfully, we can often get all or many of the movers and displacements in a game before too many of these duplicates pile up, and then proceed to Stage 2.)
+
+#### Saving the results
 
 `play` takes actions for a user-set number of frames, then stops and dumps a pickled version of the `MoverTracker` into a new game-specific subdirectory of the `mt` directory, so it can be loaded and used later.  As it plays, it also dumps the snapshots taken of each mover on each frame to a (new, game-specific) subdirectory of the `img` directory.
 
@@ -88,18 +93,39 @@ The process just described finds movers on an individual frame pair.  The `Mover
 
 As described above, Piaget can (often) isolate the sprites of moving objects.  These sprites are the kind of structures we'd expect a ConvNet to learn to recognize.  We can jump-start that process by using the sprite images we've already identified as ConvNet filters.  The `Prototyper` class handles this process.
 
+#### Prototyping
+
+When we create a Prototyper, we give it a game ID.  It loads the saved images and MoverTracker associated with that ID, and does two things:
+
+First, it selects a representative snapshot of each mover to serve as our proxy for that mover's sprite, which I call a "prototype."  These will be used to make filters for the first layer of our ConvNet.
+
+Second, it looks at the *trajectory* we observed for that mover, and generates a set of *displacements*, which will be used to make filters for a second layer that takes inputs from the first.  To allow us to get away with running Stage 1 for fewer frames, I make the assumption that something that moves in one direction can probably also move in reflections of that direction.  So for every observed displacement vector (*x*, *y*), I also generate the displacements (*-x*, *y*), (*x*, *-y*), and (*-x*, *-y*).  Any resulting duplicates are of course removed.
+
+#### ConvNets
+
+There are currently two classes that build nets based on Prototyper information: `ProtoQNetwork` and `ProtoModelNetwork`.
+
+`ProtoQNetwork` builds a four-layer, dueling Q-Network architecture.  It's intended to do deep Q-learning for the Atari games using a very similar setup to the one in DeepMind's DQN papers (see [here](https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf) and, for the Dueling architecture, [here](https://arxiv.org/pdf/1511.06581.pdf)).  The one difference here is that the first two layers are fixed (not trainable) and initialized from the prototypes and displacements we found.
+
+The `ProtoQNetwork` code was adapted from Arthur Juliani's code in his repo [DeepRL-Agents](https://github.com/awjuliani/DeepRL-Agents), associated with his excellent series of [tutorials](https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-0-q-learning-with-tables-and-neural-networks-d195264329d0).
+
+`ProtoModelNetwork` builds a similar network architecture, but rather than outputting a Q value, it tries to predict what its own first layer will see on the *next* frame.
+
+I've found that Q-learning is still quite slow (in a data efficiency sense) even with Stage 1 information, while the sort of model learning I have tried is much faster (with convergence to a decent result taking on the order of a few thousand frames rather than millions).  So I've focused mostly on `ProtoModelNetwork`.
+
+#### Learning models of game dynamics
+
+The basic idea behind `ProtoModelNetwork` is as follows.  As described above, the prototypes (sprites) are used as convolutional filters for the first layer.  The output of this layer gives us a drastically simplified representation of the state information shown on each frame: with pixel-perfect sprites and appropriately set thresholds, each filter will only fire at a single pixel in the frame, corresponding to the exact center of the mover it is looking for.  (If there are multiple copies of that mover on the frame, it will fire at one pixel per copy.)
+
+But although they throw away a lot of information, we expect these outputs to carry much or all of the *game-relevant* information contained in the original frames.  Thus, we can use the output of the first layer as a proxy for the frame itself, and use "predict first layer output on the next frame" as a proxy for "predict the next frame."  Since we leave the parameters of the first layer fixed, the network is unable to "cheat" by making its own first layer easier to predict.
+
+(Cf. the motivating discussion above: we develop orientation-selective cells and other early visual processing units early in life, and are later able to rely on the output of these units as fixed primitives when learning a new visual task.  With a good set of low-level primitives fixed, the learning of higher-level dynamics can take place in a much simpler space of possibilities.)
+
+The appropriate activation and loss functions for this task are different from those we are most used to.  Since we can find pixel-perfect sprites, it does not make much sense to allow non-saturated outputs: either we match the sprite perfectly or we do not.  So I use a simple step function for the activation.  (Intuitively, it seems like activations between 0 and 1 might be useful for noticing sprites that are partially occluded or the like, but I haven't been able to make that work in practice.)
+
+For the loss function, I treat the problem as binary classification for each pixel, and use log loss summed over all pixels (and over all first-layer filters).  The output of the final layer in `ProtoModelNetwork`'s predictive net is interpreted as logits for class 1 (presence of mover at pixel), while the logits for class 0 (absence of mover at pixel) are fixed at a high value (20).  This gives the model a strong prior against activation (since almost every pixel in layer 1 will be inactive), while allowing it to make exponentially fast jumps away from this prior when warranted (because it predicts logits, not raw probabilities).
 
 
-
-
-
-There are currently two classes that build nets based on Prototyper information: ProtoQNetwork and ProtoModelNetwork.
-
-ProtoQNetwork builds a four-layer, dueling Q-Network architecture.  It's intended to do deep Q-learning for the Atari games using a very similar setup to the one in DeepMind's DQN papers (see [here](https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf) and, for the Dueling architecture, [here](https://arxiv.org/pdf/1511.06581.pdf)).  The one difference here is that the first two layers are fixed (not trainable) and initialized from the prototyes and displacements we found.
-
-The ProtoQNetwork code was adapted from Arthur Juliani's code in his repo [DeepRL-Agents](https://github.com/awjuliani/DeepRL-Agents), associated with his excellent series of [tutorials](https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-0-q-learning-with-tables-and-neural-networks-d195264329d0).
-
-ProtoModelNetwork builds a similar network architecture, but rather than outputting a Q value, it tries to predict what its own first layer will see on the *next* frame.  I've found that Q-learning is still quite slow (in a data efficiency sense) even with
 
 ***
 
