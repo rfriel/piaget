@@ -41,8 +41,8 @@ good_indices = (box_colors_hsv[0][:,1] > 0.5) & (box_colors_hsv[0][:,2] < 0.8)
 box_colors = box_colors_rgb[0][good_indices]
 
 # catching a numpy runtime warning -- make this specific to RuntimeWarning?
-import warnings
-warnings.filterwarnings('error')
+# import warnings
+# warnings.filterwarnings('error')
 
 # classes
 
