@@ -5,6 +5,8 @@ Note: This is a personal project which is currently in the "trying lots of exper
 
 The first section below, [Motivation](#motivation), describes the ideas about deep reinforcement learning that inspired this experiment.  If you're looking for what the code actually does, see the second section, [Piaget](#piaget-1), and the demo notebook, `piaget_demo.ipynb`.  (The demo notebook provides a better introduction than can be done in text, so I recommend checking it out.)
 
+Requires gym, TensorFlow, Pillow, CV2, and pyemd.
+
 ##  Motivation
 
 ### Data Efficiency
@@ -35,6 +37,16 @@ Let's be a lot more concrete.  If I sit down to play an Atari game I've never se
 
 If you start with the not-especially-strong, physically motivated assumption that *moving things are persistent and important*, you can immediately extract a lot of information from the first few frames of an Atari game.  Take the difference between frames and identify the (typically small) regions where something has changed.  These usually correspond to moving objects (sprites).  Track which regions have similar positions as time elapses, take snapshots of those regions and apply some basic computer vision to them, and you've got reliable images of the most significant moving objects in the game, plus a sample trajectory for each one -- within as few as 5, 10, or 15 frames.  Use the snapshots to initialize the first layer of a ConvNet, and the observed motions to initialize the second layer, and after 15 frames you've got a set of filters that pinpoint the most important things in the game.  All of this assumes a fair amount about the visual/spatial structure of the environment -- but then, so do ConvNets alone.
 
+### The specificity question
+
+As you'll see below, this project is already quite complicated, and more complications would need to be added to get real functionality out of it.  It involves a lot of ugly heuristics and a lot of little design choices tailored specifically to the Atari domain.  In a sense, it isn't really fair to compare an effort like this to a more generic deep learning model.  If you have the time and energy to do boutique feature engineering for a problem domain, of course this will help with performance -- the magical thing about neural nets is that they can save you this time and effort by engineering the features on their own.
+
+I think the fairness of the comparison depends on what question we are asking.  For practical engineering in the present day, neural nets are a great way to make things more efficient.  But we may also wonder about longer-term questions: how far do these methods generalize?  What sorts of modifications would be necessary to allow them to reproduce more facets of human-level performance on a wider range of tasks?
+
+Our one functioning example of a system that can achieve "human-level performance" on all domains -- the human brain/body itself -- doesn't look like a highly general learning system *or* like a highly specialized bundle of domain-specific assumptions.  It looks like a very complicated assemblage of parts with *varying* levels of domain specificity.
+
+And there are indeed many different "levels" of domain specificity.  Some of the assumption I use here are tailored specifically to the Atari domain, but many would work in any 2D sprite-based visual environment, including the interfaces of most computer software.  My contention is that if we want to keep getting closer to human-level performance on more tasks, we may eventually have to do engineering lower down in the hierarchy of domain specificity; after all, the human brain does so.  In any event, I think it's interesting to explore the "middle" of that hierarchy -- if nothing else, just to see what happens!
+
 ## Piaget
 
 Piaget is an attempt to apply the above ideas to the Atari environments in the [OpenAI Gym](http://gym.openai.com/).
@@ -51,14 +63,92 @@ I'll now describe the two stages in more detail.
 
 ### Stage 1: Movers
 
+Stage 1 is implemented by the `play` function, which is mostly a wrapper for the `MoverTracker` class.  The user creates an OpenAI gym `env` object and passes it to  `play`, which creates a `MoverTracker`, takes random actions in the environment, and passes successive frames, actions and rewards to the `MoverTracker`.
 
+The `MoverTracker` class assembles each pair of observed frames into a `FramePair` object.  (These overlap: we will have a pair for frames 0 and 1, a separate pair for 1 and 2, etc.)  Each time we assemble a new pair of frames, we take the arithmetic difference of the two, which eliminates the background, and do additional processing to find moving objects.  This processing is handled by the `FramePair` object itself and by a `TranslationFinder` object it creates and owns (mostly by the latter).
+
+#### Processing frame pairs
+
+First, the frame difference is converted to grayscale, thresholded to black-and-white, and put through OpenCV's `dilate` function to fill in small gaps.  I then use OpenCV's `findContours` and `boundingRect` to find bounding boxes for the distinct white areas in this image, which generally correspond to disjoint edges of moving objects.
+
+Next, I extend the list of bounding boxes to cover all *unions* of the bounding boxes.  This is useful because a large, flatly colored object may show up in the frame difference as several disjoint edges around an invisible middle, and in this case we need a box big enough to contain the whole thing.
+
+The images below show an example of this process for a frame pair from the game Breakout.  It exhibits the phenomenon just mentioned -- the paddle is a single object in the frames, but its motion appears as two disjoint regions in the frame difference.
+
+![](readme_images/frame_difference.png)
+
+![](readme_images/frame_processing.png)
+
+For each of the resulting boxes, I then run some tests to check, roughly speaking, the level of support for the hypothesis that the box's contents on the second frame are merely a translated copy of its contents on the first.  I use OpenCV's `phaseCorrelate` to guess an appropriate displacement, apply this displacement to the box's contents on the first frame (in the `generate_translate` method), and check the results against the second frame (in the `score_gt` method).  The `find_translations` method uses the resulting scores and some heuristics to group the distinct white regions into "movers" (objects).
+
+(In the simplest case, every region is its own mover, there are cases where there are fewer movers than regions.  In the case shown in the images above, the right answer -- and the one Piaget finds -- is to group the two boxes near the bottom together as one mover, while identifying the box higher up as a second, separate mover.)
+
+In the most favorable cases -- where "translated copy" hypothesis is precisely true -- this process allows us to find exactly where the mover was on both frames.  Thus, although we started with a single bounding box for the mover (which bounded its footprint in the frame difference), we can now form two bounding boxes, one for each frame.  In the ideal case, the contents of these two boxes are identical, and correspond to the mover's sprite.
+
+That is, the original box will have contents that look like this:
+
+![](readme_images/boxes_uncropped.png)
+
+But knowing the translation, we can appropriately crop each frame's box, isolating the sprite on each frame:
+
+![](readme_images/boxes_cropped.png)
+
+#### Assembling mover histories
+
+The process just described finds movers on an individual frame pair.  The `MoverTracker` handles the task of linking these together to find persistent entities.  Each of these persistent entities is represented by an object of the `Mover` class.  If we're tracking things perfectly, the linking process should be easy: frame pair (*n-1*, *n*) gives us the mover's bounding boxes on frames *n-1* and *n*, and when we process frame pair (*n*, *n+1*), we should find the exact same bounding box for frame *n* if we're indeed tracking the same mover.  For various reasons, this doesn't always happen (non-constant backgrounds, collisions, movers that change appearance), and so I fudge it a bit by allowing the box centers to differ by up to 2 pixels (in Euclidean distance).  Even with this fudging, Piaget *still* tends to err on the side of inventing too many movers.  (Thankfully, we can often get all or many of the movers and displacements in a game before too many of these duplicates pile up, and then proceed to Stage 2.)
+
+#### Saving the results
+
+`play` takes actions foar a user-set number of frames, then stops and dumps a pickled version of the `MoverTracker` into a new game-specific subdirectory of the `mt` directory, so it can be loaded and used later.  As it plays, it also dumps the snapshots taken of each mover on each frame to a (new, game-specific) subdirectory of the `img` directory.
 
 ### Stage 2: Nets
 
-***
+As described above, Piaget can (often) isolate the sprites of moving objects.  These sprites are the kind of structures we'd expect a ConvNet to learn to recognize.  We can jump-start that process by using the sprite images we've already identified as ConvNet filters.  The `Prototyper` class handles this process.
 
-Work in progress.  Designed for visual environments from the , like Atari games.  The central idea is to write a learner that "crawls before it can walk," e.g. figures out some basic things about the visual environment (what types of moving things are there, which can it control) first, then leverages that information to learn about the state and reward dynamics, etc.
+#### Prototyping
 
-Once a certain amount of information has been obtained, I'll probably use it to estimate values in something like Q-learning, and perhaps add a generic CNN that tries to correct for what this information misses.  I'm curious whether this approach will have some advantages over doing deep Q-learning from scrach, by leveraging some properties that first-time human players assume from background experience (visual states contain persistent objects, changes are composed of local object motions, the player can directly control some objects and not others).
+When we create a Prototyper, we give it a game ID.  It loads the saved images and MoverTracker associated with that ID, and does two things:
 
-Requires gym, TensorFlow, Pillow, and cv2.  Running piaget.py will (as of this writing, 5/9/17) play a bit of Ms. Pacman and dump images of the moving objects it identified.  In inception_tests.ipynb, I've done some tests with classifying these images via a linear classifier on Inception v3 features; I'm planning to have the model use this information to discern types of moving objects and to make object tracking more stable.
+First, it selects a representative snapshot of each mover to serve as our proxy for that mover's sprite, which I call a "prototype."  These will be used to make filters for the first layer of our ConvNet.
+
+Second, it looks at the *trajectory* we observed for that mover, and generates a set of *displacements*, which will be used to make filters for a second layer that takes inputs from the first.  To allow us to get away with running Stage 1 for fewer frames, I make the assumption that something that moves in one direction can probably also move in reflections of that direction.  So for every observed displacement vector (*x*, *y*), I also generate the displacements (*-x*, *y*), (*x*, *-y*), and (*-x*, *-y*).  Any resulting duplicates are of course removed.
+
+#### ConvNets
+
+There are currently two classes that build nets based on Prototyper information: `ProtoQNetwork` and `ProtoModelNetwork`.
+
+`ProtoQNetwork` builds a four-layer, dueling Q-Network architecture.  It's intended to do deep Q-learning for the Atari games using a very similar setup to the one in DeepMind's DQN papers (see [here](https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf) and, for the Dueling architecture, [here](https://arxiv.org/pdf/1511.06581.pdf)).  The one difference here is that the first two layers are fixed (not trainable) and initialized from the prototypes and displacements we found.
+
+The `ProtoQNetwork` code was adapted from Arthur Juliani's code in his repo [DeepRL-Agents](https://github.com/awjuliani/DeepRL-Agents), associated with his excellent series of [tutorials](https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-0-q-learning-with-tables-and-neural-networks-d195264329d0).
+
+`ProtoModelNetwork` builds a similar network architecture, but rather than outputting a Q value, it tries to predict what its own first layer will see on the *next* frame.
+
+I've found that Q-learning is still quite slow (in a data efficiency sense) even with Stage 1 information, while the sort of model learning I have tried is much faster (with convergence to a decent result taking on the order of a few thousand frames rather than millions).  So I've focused mostly on `ProtoModelNetwork`.
+
+#### Learning models of game dynamics
+
+The basic idea behind `ProtoModelNetwork` is as follows.  As described above, the prototypes (sprites) are used as convolutional filters for the first layer.  The output of this layer gives us a drastically simplified representation of the state information shown on each frame: with pixel-perfect sprites and appropriately set thresholds, each filter will only fire at a single pixel in the frame, corresponding to the exact center of the mover it is looking for.  (If there are multiple copies of that mover on the frame, it will fire at one pixel per copy.)
+
+But although they throw away a lot of information, we expect these outputs to carry much or all of the *game-relevant* information contained in the original frames.  Thus, we can use the output of the first layer as a proxy for the frame itself, and use "predict first layer output on the next frame" as a proxy for "predict the next frame."  Since we leave the parameters of the first layer fixed, the network is unable to "cheat" by making its own first layer easier to predict.
+
+(Cf. the motivating discussion above: we develop orientation-selective cells and other early visual processing units early in life, and are later able to rely on the output of these units as fixed primitives when learning a new visual task.  With a good set of low-level primitives fixed, the learning of higher-level dynamics can take place in a much simpler space of possibilities.)
+
+The appropriate activation and loss functions for this task are different from those we are most used to.  Since we can find pixel-perfect sprites, it does not make much sense to allow non-saturated outputs: either we match the sprite perfectly or we do not.  So I use a simple step function for the activation.  (Intuitively, it seems like activations between 0 and 1 might be useful for noticing sprites that are partially occluded or the like, but I haven't been able to make that work in practice.)
+
+For the loss function, I treat the problem as binary classification for each pixel, and use log loss summed over all pixels (and over all first-layer filters).  The output of the final layer in `ProtoModelNetwork`'s predictive net is interpreted as logits for class 1 (presence of mover at pixel), while the logits for class 0 (absence of mover at pixel) are fixed at a high value (20).  This gives the model a strong prior against activation (since almost every pixel in Layer 1 will be inactive), while allowing it to make exponentially fast jumps away from this prior when warranted (because it predicts logits, not raw probabilities).
+
+The predictive net itself has the following structure.  Layer 1 (prototypes) has two filters per mover, one that sees the most recent frame (frame *n*) and one that sees the frame before it (frame *n-1*).  In addition to Layer 1 (prototypes), the `Prototyper` also gives us a fixed Layer 2 (displacements).  Layer 2 filters take Layer 1 as input and fire only when an activation on frame *n-1* is paired with an activation a specified distance away on frame *n*.
+
+The third layer takes both Layers 1 and 2 as input, and learns a set of 5x5 filters with stride 1.  A fourth layer takes Layer 3 as input and also learns 5x5 filters with stride 1.  All inputs are padded so that outputs are the same size as the input.  The number of filters in layers 3 and 4 are the same, and are set by the number of outputs we ultimately need, which I'll specify in the next paragraph.
+
+The output of Layer 4 is split into separate value and advantage streams.  The former is independent of the action and allows for quick learning for movers which the player cannot control.  The latter has one filter for every *pair* of possible actions, since objects controlled by the player in Atari games seem empirically to depend on the both of the last two actions.  This sounds prohibitely inefficient -- 64 filters for a game with 8 actions, no generalization between them -- but seems to work pretty well in practice.
+
+If the environment has *n_act* possible actions, and there are *n_mov* movers in Layer 1, then together we need *n_mov* \* (1 + *n_act*^2) outputs.  (We need separate action and value streams for each mover.)  This has to be the number of filters in Layer 4, and I also make it the number of filters in Layer 3.
+
+#### Prediction
+
+To be useful, our model ought to be able to predict more than just the very next frame.  After all, rewards in Atari games often occur many frames after the events that triggered them.  (E.g. balls and bullets take time to travel to their targets.)
+
+Since we've already assumed that Layer 1 output (plus actions) provides a sufficient representation of the game state, we ought to be able to chain predictions together to get Layer 1 output many frames in the future, given a hypothetical list of future actions.
+
+This is at the edge of what I've done with the project thus far.  In a single game with simple dynamics (Breakout), I can get long-term predictions that are basically sensible in that they reflect what the model knows.  (The ball moves diagonally, the paddle moves in the direction you tell it to.)  These prediction are not yet useful, though, because the model can't learn all the dynamics yet -- specifically, it can't learn the dynamical consequences of environment features that are always or usually immobile.  I've tried adding extra learnable filters that sit alongside the non-learnable Layer 1 filters (called "free kernels" in the code), but I haven't gotten very good results with this yet.
