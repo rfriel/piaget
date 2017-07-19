@@ -5,6 +5,8 @@ Note: This is a personal project which is currently in the "trying lots of exper
 
 The first section below, [Motivation](#motivation), describes the ideas about deep reinforcement learning that inspired this experiment.  If you're looking for what the code actually does, see the second section, [Piaget](#piaget-1), and the demo notebook, `piaget_demo.ipynb`.  (The demo notebook provides a better introduction than can be done in text, so I recommend checking it out.)
 
+Requires gym, TensorFlow, Pillow, CV2, and pyemd.
+
 ##  Motivation
 
 ### Data Efficiency
@@ -34,6 +36,16 @@ So while humans do have domain specific prior knowledge, we acquire that knowled
 Let's be a lot more concrete.  If I sit down to play an Atari game I've never seen before, I have a lot of expectations.  Not just that I'll be interacting with a two-dimensional spatial world (a bit of domain knowledge captured in the ConvNet architecture), but that motion is important, that there are persistent *objects* which move, that these objects are probably more important than static parts of the background, that it is probably important when these collide.
 
 If you start with the not-especially-strong, physically motivated assumption that *moving things are persistent and important*, you can immediately extract a lot of information from the first few frames of an Atari game.  Take the difference between frames and identify the (typically small) regions where something has changed.  These usually correspond to moving objects (sprites).  Track which regions have similar positions as time elapses, take snapshots of those regions and apply some basic computer vision to them, and you've got reliable images of the most significant moving objects in the game, plus a sample trajectory for each one -- within as few as 5, 10, or 15 frames.  Use the snapshots to initialize the first layer of a ConvNet, and the observed motions to initialize the second layer, and after 15 frames you've got a set of filters that pinpoint the most important things in the game.  All of this assumes a fair amount about the visual/spatial structure of the environment -- but then, so do ConvNets alone.
+
+### The specificity question
+
+As you'll see below, this project is already quite complicated, and more complications would need to be added to get real functionality out of it.  It involves a lot of ugly heuristics and a lot of little design choices tailored specifically to the Atari domain.  In a sense, it isn't really fair to compare an effort like this to a more generic deep learning model.  If you have the time and energy to do boutique feature engineering for a problem domain, of course this will help with performance -- the magical thing about neural nets is that they can save you this time and effort by engineering the features on their own.
+
+I think the fairness of the comparison depends on what question we are asking.  For practical engineering in the present day, neural nets are a great way to make things more efficient.  But we may also wonder about longer-term questions: how far do these methods generalize?  What sorts of modifications would be necessary to allow them to reproduce more facets of human-level performance on a wider range of tasks?
+
+Our one functioning example of a system that can achieve "human-level performance" on all domains -- the human brain/body itself -- doesn't look like a highly general learning system *or* like a highly specialized bundle of domain-specific assumptions.  It looks like a very complicated assemblage of parts with *varying* levels of domain specificity.
+
+And there are indeed many different "levels" of domain specificity.  Some of the assumption I use here are tailored specifically to the Atari domain, but many would work in any 2D sprite-based visual environment, including the interfaces of most computer software.  My contention is that if we want to keep getting closer to human-level performance on more tasks, we may eventually have to do engineering lower down in the hierarchy of domain specificity; after all, the human brain does so.  In any event, I think it's interesting to explore the "middle" of that hierarchy -- if nothing else, just to see what happens!
 
 ## Piaget
 
@@ -87,7 +99,7 @@ The process just described finds movers on an individual frame pair.  The `Mover
 
 #### Saving the results
 
-`play` takes actions for a user-set number of frames, then stops and dumps a pickled version of the `MoverTracker` into a new game-specific subdirectory of the `mt` directory, so it can be loaded and used later.  As it plays, it also dumps the snapshots taken of each mover on each frame to a (new, game-specific) subdirectory of the `img` directory.
+`play` takes actions foar a user-set number of frames, then stops and dumps a pickled version of the `MoverTracker` into a new game-specific subdirectory of the `mt` directory, so it can be loaded and used later.  As it plays, it also dumps the snapshots taken of each mover on each frame to a (new, game-specific) subdirectory of the `img` directory.
 
 ### Stage 2: Nets
 
@@ -123,10 +135,20 @@ But although they throw away a lot of information, we expect these outputs to ca
 
 The appropriate activation and loss functions for this task are different from those we are most used to.  Since we can find pixel-perfect sprites, it does not make much sense to allow non-saturated outputs: either we match the sprite perfectly or we do not.  So I use a simple step function for the activation.  (Intuitively, it seems like activations between 0 and 1 might be useful for noticing sprites that are partially occluded or the like, but I haven't been able to make that work in practice.)
 
-For the loss function, I treat the problem as binary classification for each pixel, and use log loss summed over all pixels (and over all first-layer filters).  The output of the final layer in `ProtoModelNetwork`'s predictive net is interpreted as logits for class 1 (presence of mover at pixel), while the logits for class 0 (absence of mover at pixel) are fixed at a high value (20).  This gives the model a strong prior against activation (since almost every pixel in layer 1 will be inactive), while allowing it to make exponentially fast jumps away from this prior when warranted (because it predicts logits, not raw probabilities).
+For the loss function, I treat the problem as binary classification for each pixel, and use log loss summed over all pixels (and over all first-layer filters).  The output of the final layer in `ProtoModelNetwork`'s predictive net is interpreted as logits for class 1 (presence of mover at pixel), while the logits for class 0 (absence of mover at pixel) are fixed at a high value (20).  This gives the model a strong prior against activation (since almost every pixel in Layer 1 will be inactive), while allowing it to make exponentially fast jumps away from this prior when warranted (because it predicts logits, not raw probabilities).
 
+The predictive net itself has the following structure.  Layer 1 (prototypes) has two filters per mover, one that sees the most recent frame (frame *n*) and one that sees the frame before it (frame *n-1*).  In addition to Layer 1 (prototypes), the `Prototyper` also gives us a fixed Layer 2 (displacements).  Layer 2 filters take Layer 1 as input and fire only when an activation on frame *n-1* is paired with an activation a specified distance away on frame *n*.
 
+The third layer takes both Layers 1 and 2 as input, and learns a set of 5x5 filters with stride 1.  A fourth layer takes Layer 3 as input and also learns 5x5 filters with stride 1.  All inputs are padded so that outputs are the same size as the input.  The number of filters in layers 3 and 4 are the same, and are set by the number of outputs we ultimately need, which I'll specify in the next paragraph.
 
-***
+The output of Layer 4 is split into separate value and advantage streams.  The former is independent of the action and allows for quick learning for movers which the player cannot control.  The latter has one filter for every *pair* of possible actions, since objects controlled by the player in Atari games seem empirically to depend on the both of the last two actions.  This sounds prohibitely inefficient -- 64 filters for a game with 8 actions, no generalization between them -- but seems to work pretty well in practice.
 
-Requires gym, TensorFlow, Pillow, and cv2.
+If the environment has *n_act* possible actions, and there are *n_mov* movers in Layer 1, then together we need *n_mov* \* (1 + *n_act*^2) outputs.  (We need separate action and value streams for each mover.)  This has to be the number of filters in Layer 4, and I also make it the number of filters in Layer 3.
+
+#### Prediction
+
+To be useful, our model ought to be able to predict more than just the very next frame.  After all, rewards in Atari games often occur many frames after the events that triggered them.  (E.g. balls and bullets take time to travel to their targets.)
+
+Since we've already assumed that Layer 1 output (plus actions) provides a sufficient representation of the game state, we ought to be able to chain predictions together to get Layer 1 output many frames in the future, given a hypothetical list of future actions.
+
+This is at the edge of what I've done with the project thus far.  In a single game with simple dynamics (Breakout), I can get long-term predictions that are basically sensible in that they reflect what the model knows.  (The ball moves diagonally, the paddle moves in the direction you tell it to.)  These prediction are not yet useful, though, because the model can't learn all the dynamics yet -- specifically, it can't learn the dynamical consequences of environment features that are always or usually immobile.  I've tried adding extra learnable filters that sit alongside the non-learnable Layer 1 filters (called "free kernels" in the code), but I haven't gotten very good results with this yet.
