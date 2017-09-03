@@ -247,7 +247,8 @@ class protoModelnetwork():
                  net_index=0,
                  n_free_kernels = 4,
                  train_free_kernels=True,
-                 bg=None):
+                 bg=None,
+                 n_frames=4):
 
         self.pt = pt
         self.existing_filters_counts = existing_filters_counts
@@ -267,9 +268,10 @@ class protoModelnetwork():
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
         self.bg = bg
+        self.n_frames = n_frames
 
-        self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*2],dtype=tf.float32)
-        self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,frame_h,frame_w,3*2])
+        self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
+        self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,frame_h,frame_w,3*n_frames])
         self.batch_size = tf.shape(self.imageIn)[0]
 
         self.mover_conv_list = []
@@ -294,7 +296,7 @@ class protoModelnetwork():
         self.conv_mover_kernels = tf.concat(self.mover_filter_list,2)
 
         self.mover_conv_list_frame1 = [
-            self.conv_movers[:,...,2*i+1:2*i+2]
+            self.conv_movers[:,...,n_frames*i+1:n_frames*i+2]
             for i in range(len(self.pt.mover_prototypes))]
         self.conv_movers_frame1 = tf.concat(self.mover_conv_list_frame1,3)
 
@@ -613,10 +615,18 @@ class protoModelnetwork():
         p0_norm = np.sum(p0*(proto/255.))
         p0 = p0 / p0_norm
 
-        p0_frame0 = np.concatenate([p0, np.zeros_like(p0)],2)
-        p0_frame1 = np.concatenate([np.zeros_like(p0), p0],2)
+        # p0_frame0 = np.concatenate([p0, np.zeros_like(p0)],2)
+        # p0_frame1 = np.concatenate([np.zeros_like(p0), p0],2)
+        p0_frame_list = []
+        for i in range(self.n_frames):
+            p0_frame_i = np.zeros((p0.shape[0], p0.shape[1],
+                                   3*self.n_frames))
+            p0_frame_i[:,:,(i*3):((i+1)*3)] = p0
+            p0_frame_list.append(p0_frame_i)
 
-        p0_multi_frame = np.stack([p0_frame0, p0_frame1],3)
+        #p0_multi_frame = np.stack([p0_frame0, p0_frame1],3)
+        p0_multi_frame = np.stack(p0_frame_list,3)
+
         with tf.variable_scope(self.model_name +
                                "/piaget/prototypes/proto" +
                                str(self.pt.mover_ids[ind]),
@@ -630,7 +640,7 @@ class protoModelnetwork():
                                strides=[1,1,1,1],
                                padding='SAME'
                               )
-            self.biases = tf.get_variable(name='bias',shape=(2),
+            self.biases = tf.get_variable(name='bias',shape=(self.n_frames),
                                     initializer=tf.constant_initializer(
                                         -0.9))
             self.bias = tf.nn.bias_add(self.conv, self.biases)
@@ -642,7 +652,7 @@ class protoModelnetwork():
                 reuse=(ind < self.existing_filters_counts[0])):
 
             conv1_kernel = tf.get_variable(name='kernel',
-                                    shape=[5,5,2,self.VA_n_ch*self.n_ch_out],
+                                    shape=[5,5,self.n_frames,self.VA_n_ch*self.n_ch_out],
                                    initializer=
                                    tf.contrib.layers.xavier_initializer()
                                    )
