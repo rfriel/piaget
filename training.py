@@ -84,18 +84,21 @@ def updateTarget(op_holder,sess):
 def processState(states):
     return np.reshape(states,[np.product(states.shape)])
 
-def initial_obs(env, breakout=False):
+def initial_obs(env, n_frames=2, breakout=True):
     env.reset()
+    s_list = []
+
     if breakout:
         s, r, d, info = env.step(1) # request next ball in breakout
     else:
         s, r, d, info = env.step(np.random.randint(0,env.action_space.n))
-    s1, r1, d1, info1 = env.step(np.random.randint(0,env.action_space.n))
+    s_list.append(s)
 
-    s_list = [s, s1]
+    for i in range(n_frames-1):
+        s1, r1, d1, info1 = env.step(np.random.randint(0,env.action_space.n))
+        s_list.append(s1)
 
     return s_list, r1, d1, info1
-
 
 def train_protoModelNetwork(env, pt, breakout=False,
                         batch_size=32, update_freq=4, y=.75, startE=1,
@@ -110,7 +113,9 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         burnin_batches_init=250, burnin_batches_new_mover=250,
                         outlier_sample_min_batches=25, new_mover_thresh=5,
                         loss_thresh=0, n_free=0,
-                        free_kernel_batches=15000000):
+                        free_kernel_batches=15000000,
+                        n_frames=2,
+                        print_rate=25):
 
     # making params that depend on batch_size
     burnin_frames_init = batch_size * burnin_batches_init
@@ -161,7 +166,8 @@ def train_protoModelNetwork(env, pt, breakout=False,
                 lr=learning_rate, eps=adam_eps,
                                bg=None,
                               n_free_kernels=n_free,
-                              frame_h=frame_h)
+                              frame_h=frame_h,
+                              n_frames=n_frames)
 
     init = tf.global_variables_initializer()
     sess.run(init)
@@ -175,11 +181,13 @@ def train_protoModelNetwork(env, pt, breakout=False,
 
     #updateTarget(targetOps,sess) #Set the target network to be equal to the primary network.
     for i in range(num_episodes):
+        print 'Starting episode %d (total steps: %d)' % (i, total_steps)
         episodeBuffer = experience_buffer()
         #Reset environment and get first new observation(s)
-        s_list, r, d, info = initial_obs(env, breakout)
+        s_list, r, d, info = initial_obs(env, n_frames, breakout)
         s_stack = np.dstack(s_list)
         s = processState(s_stack)
+
         if breakout:
             a = 1
         else:
@@ -200,7 +208,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
 
         act_repeat_countdown = 0
         breakout_requesting = False
-        while j < max_epLength: #If the agent takes longer than 200 moves to reach either of the blocks, end the trial.
+        while j < max_epLength:
             j+=1
 
             save_to_buffer = True
@@ -370,7 +378,8 @@ def train_protoModelNetwork(env, pt, breakout=False,
                                    mean_reward_pool=None,
                                 n_free_kernels=n_free,
                                 existing_filters_counts=prev_filter_counts,
-                                net_index=QN_index)
+                                net_index=QN_index,
+                                n_frames=n_frames)
 
                                 tf_vars = tf.global_variables()
                                 tf_initialized = sess.run([tf.is_variable_initialized(v) for v in tf_vars])
@@ -399,6 +408,217 @@ def train_protoModelNetwork(env, pt, breakout=False,
 
             if d == True:
                 break
+
+            if total_steps > pre_train_steps and \
+            ((total_steps - pre_train_steps) / update_freq) % print_rate == 0:
+                print 'total_steps: %d' % total_steps
+                print 'mean log loss (last 100 training frames): %2.f ' % \
+                np.mean(frame_err_list[-batch_size*100:,:])
+                n_example_frames = 2
+                print '\nDisplaying model performance on %d random frames from buffer...\n'  % n_example_frames
+                for example_frame_ind in range(n_example_frames):
+                    displayBatch = myBuffer.sample(1, attention=False)
+                    target_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
+                    pred_pool = sess.run(mainQN.pred_pool,\
+                                         feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
+                                                    mainQN.actions:displayBatch[:,1],
+                                                    mainQN.old_actions:displayBatch[:,5]})
+                    previous_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0])})
+
+                    pred_V = sess.run(mainQN.streamV,\
+                             feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
+                                        mainQN.actions:displayBatch[:,1],
+                                        mainQN.old_actions:displayBatch[:,5]})
+                    pred_A = sess.run(tf.einsum('abcde,ae->abcd',mainQN.streamA,mainQN.actions_onehot),\
+                                         feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
+                                                    mainQN.actions:displayBatch[:,1],
+                                                    mainQN.old_actions:displayBatch[:,5]})
+
+
+                    print "Example frame %d" % example_frame_ind
+                    print 'action: %d, previous action: %d' % (displayBatch[0][1],
+                                                               displayBatch[0][5])
+
+                    plt.figure(figsize=(12,4))
+                    s0 = np.reshape(displayBatch[0,0],(frame_h,160,3*n_frames))
+                    s1 = np.reshape(displayBatch[0,3],(frame_h,160,3*n_frames))
+
+                    s0 = s0[:,:,-6:]
+                    s1 = s1[:,:,-6:]
+
+                    plt.subplot(131)
+                    plt.imshow(s0[:,:,3:] - s0[:,:,:3])
+                    plt.title('Difference');
+                    plt.subplot(132)
+                    plt.imshow(s0[:,:,:3])
+                    plt.title('First frame');
+                    plt.subplot(133)
+                    plt.imshow(s0[:,:,3:])
+                    plt.title('Second frame');
+                    plt.show()
+
+                    i_max = target_pool.shape[3]
+                    j_max = 5
+                    for ii in range(i_max):
+                        print '\nShowing region near mover %d...\n' % pt.mover_ids[ii]
+                        target_img = (target_pool[0,:,:,ii]>0.)
+                        pred_img = pred_pool[0,:,:,ii]
+                        previous_img = (previous_pool[0,:,:,ii]>0.)
+
+                        predV_img = pred_V[0,:,:,ii]
+                        predA_img = pred_A[0,:,:,ii]
+
+                        vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
+                        vis_center = (max(vis_center[0],5), max(vis_center[1],5))
+                        target_img = target_img[vis_center[0]-5:vis_center[0]+5,
+                                               vis_center[1]-5:vis_center[1]+5]
+                        pred_img = pred_img[vis_center[0]-5:vis_center[0]+5,
+                                               vis_center[1]-5:vis_center[1]+5]
+                        previous_img = previous_img[vis_center[0]-5:vis_center[0]+5,
+                                               vis_center[1]-5:vis_center[1]+5]
+                        predV_img = predV_img[vis_center[0]-5:vis_center[0]+5,
+                           vis_center[1]-5:vis_center[1]+5]
+                        predA_img = predA_img[vis_center[0]-5:vis_center[0]+5,
+                                               vis_center[1]-5:vis_center[1]+5]
+
+                        #cmap_max = max(np.max(previous_img), np.max(target_img))
+                        #cmap_min = min(np.min(previous_img), np.min(target_img))
+                        cmap_max = 1; cmap_min = 0
+                        cmap_max_VA = max(np.max(predV_img), np.max(predA_img))
+                        cmap_min_VA = min(np.min(predV_img), np.min(predA_img))
+
+                        plt.figure(figsize=(12,2*2))
+                        plt.subplot(151)
+                        plt.imshow(s0[vis_center[0]-5:vis_center[0]+5,
+                                      vis_center[1]-5:vis_center[1]+5,:3],
+                                  interpolation='nearest')
+                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('First frame')
+
+                        plt.figure(figsize=(12,2*2))
+                        plt.subplot(151)
+                        plt.imshow(s0[vis_center[0]-5:vis_center[0]+5,
+                                      vis_center[1]-5:vis_center[1]+5,3:],
+                                  interpolation='nearest')
+                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Second frame')
+
+                        plt.subplot(152)
+                        plt.imshow(s1[vis_center[0]-5:vis_center[0]+5,
+                                      vis_center[1]-5:vis_center[1]+5,3:],
+                                  interpolation='nearest')
+                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                        plt.title('Third frame')
+                        plt.show()
+
+                        plt.figure(figsize=(12,2*i_max))
+                        for jj in range(j_max//5):
+
+
+                            plt.subplot(i_max,j_max,3*jj+(ii*j_max)+1)
+                            plt.imshow(previous_img,cmap='gray',interpolation='nearest',
+                                      vmin=cmap_min, vmax=cmap_max)
+                            plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                            plt.title('Truth (2nd frame)')
+
+                            plt.subplot(i_max,j_max,3*jj+(ii*j_max)+2)
+                            plt.imshow(target_img,cmap='gray',interpolation='nearest',
+                                      vmin=cmap_min, vmax=cmap_max)
+                            plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                            plt.title('Truth (3rd frame)')
+
+                            plt.subplot(i_max,j_max,3*jj+(ii*j_max)+3)
+                            plt.imshow(softmax20(pred_img),cmap='gray',interpolation='nearest',
+                                      vmin=0, vmax=1)
+                            plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                            plt.title('Model (3rd frame)')
+
+                            plt.subplot(i_max,j_max,3*jj+(ii*j_max)+4)
+                            plt.imshow(predV_img,cmap='gray',interpolation='nearest',
+                                      vmin=cmap_min_VA, vmax=cmap_max_VA)
+                            plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                            plt.title('Model logits (value)')
+
+                            plt.subplot(i_max,j_max,3*jj+(ii*j_max)+5)
+                            plt.imshow(predA_img,cmap='gray',interpolation='nearest',
+                                      vmin=cmap_min_VA, vmax=cmap_max_VA)
+                            plt.xticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.yticks(np.linspace(-0.5,9.5,11),range(10))
+                            plt.grid(color='w',lw=1,ls='-',alpha=0.5)
+                            plt.title('Model logits (action)')
+                            plt.show()
+
+                            print 'Probability assigned to true location: %f\n' \
+                            % softmax20(pred_img[5,5])
+
+                            dcl = sess.run(mainQN.disp_conv_list,\
+                             feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
+                                        mainQN.actions:displayBatch[:,1],
+                                        mainQN.old_actions:displayBatch[:,5]})
+                    #plt.show()
+
+                    if n_free > 0:
+                        fk = sess.run(mainQN.free_kernels,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
+
+                        all_vars = tf.trainable_variables()
+                        free_weights=[v for v in all_vars \
+                         if v.name == 'mainQN/pg_free/weights:0'][0]\
+                        .eval(session=sess)
+
+                        i_max=2
+                        j_max=mainQN.n_free_kernels
+                        plt.figure(figsize=(j_max, i_max))
+                        for ii in range(i_max):
+                            target_img = (target_pool[0,:,:,ii])
+                            vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
+                            vis_center = (max(vis_center[0],5), max(vis_center[1],5))
+                            for jj in range(j_max):
+                                plt.subplot(i_max,j_max,jj+(ii*j_max)+1)
+                                plt.xticks([])
+                                plt.yticks([])
+                                fw = free_weights[:,:,(ii*3):((ii+1)*3),jj]
+                                fw = fw - np.min(fw)
+                                fw = fw / np.max(fw)
+                                plt.imshow(fw, interpolation='nearest')
+        #                         fk_img = fk[0,:,:,jj]
+
+        #                         fk_img = fk_img[vis_center[0]-5:vis_center[0]+5,
+        #                                            vis_center[1]-5:vis_center[1]+5]
+        #                         plt.imshow(fk_img,cmap='gray',interpolation='nearest')
+                        plt.show()
+
+                avg_window = batch_size*print_rate
+                if frame_err_list.shape[0] > 3*avg_window:
+                    plt.figure()
+
+                    for m_id in range(frame_err_list.shape[1]):
+                        sqMat = np.resize(frame_err_list[:,m_id],
+                                          [frame_err_list.shape[0]//avg_window,
+                                                           avg_window])
+                        QsqAvgs = np.average(sqMat,1)
+                        q95 = np.percentile(sqMat,95,1)
+                        plt.plot(QsqAvgs[1:],label='mean')
+                        plt.plot(q95[1:],label='95%')
+                        plt.xlabel('Batches/{0}'.format(avg_window // batch_size))
+                        plt.ylabel('Log loss')
+                        plt.title('Learning curves, mover {0}'
+                                  .format(pt.mover_ids[m_id]))
+                        plt.legend()
+                        plt.show()
         if not eval_episode:
             myBuffer.add(episodeBuffer.buffer,False)
             jList.append(j)
@@ -411,212 +631,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
         if i % 100 == 0 and i > 0:
             saver.save(sess,path+'/model-'+str(i)+'.cptk')
             print("Saved Model")
-        print_rate = 1
-        if len(rList) % print_rate == 0 and total_steps > pre_train_steps:
-            print 'total_steps: %d' % total_steps
-            print 'mean log loss (last 100 training frames): %d ' % \
-            np.mean(frame_err_list[-batch_size*100:,:])
-            n_example_frames = 2
-            print '\nDisplaying model performance on %d random frames from buffer...\n'  % n_example_frames
-            for example_frame_ind in range(n_example_frames):
-                displayBatch = myBuffer.sample(1, attention=False)
-                target_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
-                pred_pool = sess.run(mainQN.pred_pool,\
-                                     feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
-                                                mainQN.actions:displayBatch[:,1],
-                                                mainQN.old_actions:displayBatch[:,5]})
-                previous_pool = sess.run(mainQN.cm_pool,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0])})
 
-                pred_V = sess.run(mainQN.streamV,\
-                         feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
-                                    mainQN.actions:displayBatch[:,1],
-                                    mainQN.old_actions:displayBatch[:,5]})
-                pred_A = sess.run(tf.einsum('abcde,ae->abcd',mainQN.streamA,mainQN.actions_onehot),\
-                                     feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
-                                                mainQN.actions:displayBatch[:,1],
-                                                mainQN.old_actions:displayBatch[:,5]})
-
-
-                print "Example frame %d" % example_frame_ind
-                print 'action: %d, previous action: %d' % (displayBatch[0][1],
-                                                           displayBatch[0][5])
-
-                plt.figure(figsize=(12,4))
-                s0 = np.reshape(displayBatch[0,0],(frame_h,160,6))
-                s1 = np.reshape(displayBatch[0,3],(frame_h,160,6))
-                plt.subplot(131)
-                plt.imshow(s0[:,:,3:] - s0[:,:,:3])
-                plt.title('Difference');
-                plt.subplot(132)
-                plt.imshow(s0[:,:,:3])
-                plt.title('First frame');
-                plt.subplot(133)
-                plt.imshow(s0[:,:,3:])
-                plt.title('Second frame');
-                plt.show()
-
-                i_max = target_pool.shape[3]
-                j_max = 5
-                for ii in range(i_max):
-                    print '\nShowing region near mover %d...\n' % pt.mover_ids[ii]
-                    target_img = (target_pool[0,:,:,ii]>0.)
-                    pred_img = pred_pool[0,:,:,ii]
-                    previous_img = (previous_pool[0,:,:,ii]>0.)
-
-                    predV_img = pred_V[0,:,:,ii]
-                    predA_img = pred_A[0,:,:,ii]
-
-                    vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
-                    vis_center = (max(vis_center[0],5), max(vis_center[1],5))
-                    target_img = target_img[vis_center[0]-5:vis_center[0]+5,
-                                           vis_center[1]-5:vis_center[1]+5]
-                    pred_img = pred_img[vis_center[0]-5:vis_center[0]+5,
-                                           vis_center[1]-5:vis_center[1]+5]
-                    previous_img = previous_img[vis_center[0]-5:vis_center[0]+5,
-                                           vis_center[1]-5:vis_center[1]+5]
-                    predV_img = predV_img[vis_center[0]-5:vis_center[0]+5,
-                       vis_center[1]-5:vis_center[1]+5]
-                    predA_img = predA_img[vis_center[0]-5:vis_center[0]+5,
-                                           vis_center[1]-5:vis_center[1]+5]
-
-                    #cmap_max = max(np.max(previous_img), np.max(target_img))
-                    #cmap_min = min(np.min(previous_img), np.min(target_img))
-                    cmap_max = 1; cmap_min = 0
-                    cmap_max_VA = max(np.max(predV_img), np.max(predA_img))
-                    cmap_min_VA = min(np.min(predV_img), np.min(predA_img))
-
-                    plt.figure(figsize=(12,2*2))
-                    plt.subplot(151)
-                    plt.imshow(s0[vis_center[0]-5:vis_center[0]+5,
-                                  vis_center[1]-5:vis_center[1]+5,:3],
-                              interpolation='nearest')
-                    plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                    plt.title('First frame')
-
-                    plt.figure(figsize=(12,2*2))
-                    plt.subplot(151)
-                    plt.imshow(s0[vis_center[0]-5:vis_center[0]+5,
-                                  vis_center[1]-5:vis_center[1]+5,3:],
-                              interpolation='nearest')
-                    plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                    plt.title('Second frame')
-
-                    plt.subplot(152)
-                    plt.imshow(s1[vis_center[0]-5:vis_center[0]+5,
-                                  vis_center[1]-5:vis_center[1]+5,3:],
-                              interpolation='nearest')
-                    plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                    plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                    plt.title('Third frame')
-                    plt.show()
-
-                    plt.figure(figsize=(12,2*i_max))
-                    for jj in range(j_max//5):
-
-
-                        plt.subplot(i_max,j_max,3*jj+(ii*j_max)+1)
-                        plt.imshow(previous_img,cmap='gray',interpolation='nearest',
-                                  vmin=cmap_min, vmax=cmap_max)
-                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                        plt.title('Truth (2nd frame)')
-
-                        plt.subplot(i_max,j_max,3*jj+(ii*j_max)+2)
-                        plt.imshow(target_img,cmap='gray',interpolation='nearest',
-                                  vmin=cmap_min, vmax=cmap_max)
-                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                        plt.title('Truth (3rd frame)')
-
-                        plt.subplot(i_max,j_max,3*jj+(ii*j_max)+3)
-                        plt.imshow(softmax20(pred_img),cmap='gray',interpolation='nearest',
-                                  vmin=0, vmax=1)
-                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                        plt.title('Model (3rd frame)')
-
-                        plt.subplot(i_max,j_max,3*jj+(ii*j_max)+4)
-                        plt.imshow(predV_img,cmap='gray',interpolation='nearest',
-                                  vmin=cmap_min_VA, vmax=cmap_max_VA)
-                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                        plt.title('Model logits (value)')
-
-                        plt.subplot(i_max,j_max,3*jj+(ii*j_max)+5)
-                        plt.imshow(predA_img,cmap='gray',interpolation='nearest',
-                                  vmin=cmap_min_VA, vmax=cmap_max_VA)
-                        plt.xticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.yticks(np.linspace(-0.5,9.5,11),range(10))
-                        plt.grid(color='w',lw=1,ls='-',alpha=0.5)
-                        plt.title('Model logits (action)')
-                        plt.show()
-
-                        print 'Probability assigned to true location: %f\n' \
-                        % softmax20(pred_img[5,5])
-
-                        dcl = sess.run(mainQN.disp_conv_list,\
-                         feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,0]),
-                                    mainQN.actions:displayBatch[:,1],
-                                    mainQN.old_actions:displayBatch[:,5]})
-                #plt.show()
-
-                if n_free > 0:
-                    fk = sess.run(mainQN.free_kernels,feed_dict={mainQN.scalarInput:np.vstack(displayBatch[:,3])})
-
-                    all_vars = tf.trainable_variables()
-                    free_weights=[v for v in all_vars \
-                     if v.name == 'mainQN/pg_free/weights:0'][0]\
-                    .eval(session=sess)
-
-                    i_max=2
-                    j_max=mainQN.n_free_kernels
-                    plt.figure(figsize=(j_max, i_max))
-                    for ii in range(i_max):
-                        target_img = (target_pool[0,:,:,ii])
-                        vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
-                        vis_center = (max(vis_center[0],5), max(vis_center[1],5))
-                        for jj in range(j_max):
-                            plt.subplot(i_max,j_max,jj+(ii*j_max)+1)
-                            plt.xticks([])
-                            plt.yticks([])
-                            fw = free_weights[:,:,(ii*3):((ii+1)*3),jj]
-                            fw = fw - np.min(fw)
-                            fw = fw / np.max(fw)
-                            plt.imshow(fw, interpolation='nearest')
-    #                         fk_img = fk[0,:,:,jj]
-
-    #                         fk_img = fk_img[vis_center[0]-5:vis_center[0]+5,
-    #                                            vis_center[1]-5:vis_center[1]+5]
-    #                         plt.imshow(fk_img,cmap='gray',interpolation='nearest')
-                    plt.show()
-
-            avg_window = batch_size*100
-            if frame_err_list.shape[0] > 3*avg_window:
-                plt.figure()
-
-                for m_id in range(frame_err_list.shape[1]):
-                    sqMat = np.resize(frame_err_list[:,m_id],
-                                      [frame_err_list.shape[0]//avg_window,
-                                                       avg_window])
-                    QsqAvgs = np.average(sqMat,1)
-                    q95 = np.percentile(sqMat,95,1)
-                    plt.plot(QsqAvgs[1:],label='mean')
-                    plt.plot(q95[1:],label='95%')
-                    plt.xlabel('Batches/{0}'.format(avg_window // batch_size))
-                    plt.ylabel('Log loss')
-                    plt.title('Learning curves, mover {0}'
-                              .format(pt.mover_ids[m_id]))
-                    plt.legend()
-                    plt.show()
 
     saver.save(sess,path+'/model-'+str(i)+'.cptk')
 
@@ -681,7 +696,7 @@ def train_protoQnetwork(env, pt,
     for i in range(num_episodes):
         episodeBuffer = experience_buffer()
         #Reset environment and get first new observation(s)
-        s_list, r, d, info = initial_obs(env, breakout)
+        s_list, r, d, info = initial_obs(env, n_frames, breakout)
 
         s_stack = np.dstack(s_list)
         s = processState(s_stack)

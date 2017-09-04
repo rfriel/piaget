@@ -248,7 +248,7 @@ class protoModelnetwork():
                  n_free_kernels = 4,
                  train_free_kernels=True,
                  bg=None,
-                 n_frames=4):
+                 n_frames=2):
 
         self.pt = pt
         self.existing_filters_counts = existing_filters_counts
@@ -296,7 +296,7 @@ class protoModelnetwork():
         self.conv_mover_kernels = tf.concat(self.mover_filter_list,2)
 
         self.mover_conv_list_frame1 = [
-            self.conv_movers[:,...,n_frames*i+1:n_frames*i+2]
+            self.conv_movers[:,...,n_frames*(i+1)-1:n_frames*(i+1)]
             for i in range(len(self.pt.mover_prototypes))]
         self.conv_movers_frame1 = tf.concat(self.mover_conv_list_frame1,3)
 
@@ -800,7 +800,7 @@ class protoModelnetwork():
                                         shape=blob_multi_frame.shape,
                                        initializer=tf.constant_initializer(
                                            blob_multi_frame))
-                mover = self.conv_movers[:,...,2*ind:2*ind+2]
+                mover = self.conv_movers[:,...,self.n_frames*(ind+1)-2:self.n_frames*(ind+1)]
                 self.conv = tf.nn.conv2d(input=mover,
                    filter=self.kernel,
                    strides=[1,1,1,1],
