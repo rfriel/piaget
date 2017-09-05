@@ -267,7 +267,7 @@ class protoModelnetwork():
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
-        self.bg = bg
+        self.bg = bg.astype('float32')
         self.n_frames = n_frames
 
         self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
@@ -381,9 +381,9 @@ class protoModelnetwork():
         self.cd_with_pos = self.conv_dm
         if self.n_free_kernels > 0:
             self.bg_imageIn = tf.tile(
-                tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3*2]),
+                tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3]),
                 [self.batch_size,1,1,1])
-            self.free_kernels = slim.conv2d(inputs=self.imageIn,
+            self.free_kernels = slim.conv2d(inputs=self.bg_imageIn,
                                             num_outputs=self.n_free_kernels,
                                             kernel_size=[5,5],stride=[1,1],
                                             padding='SAME',
@@ -495,9 +495,9 @@ class protoModelnetwork():
                  scope='(?!' + self.model_name +
                                '/piaget)')
 
-        # self.trainables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-        #          scope='(?!' + self.model_name +
-        #                        '/(piaget|pg_free|pg_conv1/free))')
+        self.trainables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+                 scope='(?!' + self.model_name +
+                               '/(piaget|pg_free|pg_conv1/free))')
         self.trainables_free = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
              scope=self.model_name +
                            '/(pg_free|pg_conv1/free)')

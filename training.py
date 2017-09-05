@@ -114,6 +114,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
                         outlier_sample_min_batches=25, new_mover_thresh=5,
                         loss_thresh=0, n_free=0,
                         free_kernel_batches=15000000,
+                        bg=None,
                         n_frames=2,
                         print_rate=25):
 
@@ -164,7 +165,7 @@ def train_protoModelNetwork(env, pt, breakout=False,
     mainQN = protoModelnetwork(env, pt, 'mainQN',
                 dueling=True,
                 lr=learning_rate, eps=adam_eps,
-                               bg=None,
+                               bg=bg,
                               n_free_kernels=n_free,
                               frame_h=frame_h,
                               n_frames=n_frames)
@@ -208,16 +209,21 @@ def train_protoModelNetwork(env, pt, breakout=False,
 
         act_repeat_countdown = 0
         breakout_requesting = False
+        breakout_requesting_countdown = 1
         while j < max_epLength:
             j+=1
 
             save_to_buffer = True
             old_a = a
 
+            if breakout and breakout_requesting_countdown > 0:
+                breakout_requesting_countdown -= 1
+                save_to_buffer = False
             if breakout and breakout_requesting:
                 # prevent from saving the frame pair where the ball appears
                 save_to_buffer = False
                 breakout_requesting = False
+                breakout_requesting_countdown = n_frames
             if breakout and np.array_equal(s_list[0],s_list[1]):
                 # breakout: requesting next ball
                 a = 1
@@ -579,13 +585,13 @@ def train_protoModelNetwork(env, pt, breakout=False,
                          if v.name == 'mainQN/pg_free/weights:0'][0]\
                         .eval(session=sess)
 
-                        i_max=2
+                        i_max=1#n_frames
                         j_max=mainQN.n_free_kernels
                         plt.figure(figsize=(j_max, i_max))
                         for ii in range(i_max):
-                            target_img = (target_pool[0,:,:,ii])
-                            vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
-                            vis_center = (max(vis_center[0],5), max(vis_center[1],5))
+                            # target_img = (target_pool[0,:,:,ii])
+                            # vis_center = np.unravel_index(np.argmax(target_img), target_img.shape)
+                            # vis_center = (max(vis_center[0],5), max(vis_center[1],5))
                             for jj in range(j_max):
                                 plt.subplot(i_max,j_max,jj+(ii*j_max)+1)
                                 plt.xticks([])
@@ -610,9 +616,11 @@ def train_protoModelNetwork(env, pt, breakout=False,
                                           [frame_err_list.shape[0]//avg_window,
                                                            avg_window])
                         QsqAvgs = np.average(sqMat,1)
-                        q95 = np.percentile(sqMat,95,1)
+                        #q95 = np.percentile(sqMat,95,1)
+                        qmax = np.percentile(sqMat,100,1)
+                        #plt.plot(q95[1:],label='95%')
                         plt.plot(QsqAvgs[1:],label='mean')
-                        plt.plot(q95[1:],label='95%')
+                        plt.plot(qmax[1:],label='max')
                         plt.xlabel('Batches/{0}'.format(avg_window // batch_size))
                         plt.ylabel('Log loss')
                         plt.title('Learning curves, mover {0}'
