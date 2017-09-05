@@ -495,9 +495,9 @@ class protoModelnetwork():
                  scope='(?!' + self.model_name +
                                '/piaget)')
 
-        self.trainables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-                 scope='(?!' + self.model_name +
-                               '/(piaget|pg_free|pg_conv1/free))')
+        # self.trainables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+        #          scope='(?!' + self.model_name +
+        #                        '/(piaget|pg_free|pg_conv1/free))')
         self.trainables_free = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
              scope=self.model_name +
                            '/(pg_free|pg_conv1/free)')
