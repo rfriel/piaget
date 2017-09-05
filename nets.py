@@ -802,9 +802,8 @@ class protoModelnetwork():
                                            initializer=tf.constant_initializer(
                                                blob_multi_frame))
 
-                    # finish this ***
-                    mover_frame_index = self.n_movers self.n_frames
-                    mover = self.conv_movers[:,...,self.n_frames*(ind+1)-2:self.n_frames*(ind+1)]
+                    mover_frame_index = (self.n_frames * ind) + frame_ind
+                    mover = self.conv_movers[:,...,mover_frame_index:mover_frame_index+2]
                     self.conv = tf.nn.conv2d(input=mover,
                        filter=self.kernel,
                        strides=[1,1,1,1],
@@ -817,7 +816,7 @@ class protoModelnetwork():
                     conv_disp = tf.nn.relu(self.bias)
                     conv_disps.append(conv_disp)
 
-                    if frame_ind == n_frames-2: # last frame
+                    if frame_ind == self.n_frames-2: # last frame
                         mom_kernel = tf.get_variable(name='mom_kernel',
                                                 shape=blob_momentum.shape,
                                                initializer=tf.constant_initializer(
