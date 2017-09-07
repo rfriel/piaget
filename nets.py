@@ -267,7 +267,8 @@ class protoModelnetwork():
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
-        self.bg = bg.astype('float32')
+        self.bg = bg
+        self.bg_colors = np.reshape(bg, (-1, 3))
         self.n_frames = n_frames
 
         self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
@@ -281,11 +282,21 @@ class protoModelnetwork():
         self.disp_kernel_list = []
         self.disp_filter_list = []
 
-        self.VA_n_ch = (1 + self.n_act)
         if self.train_free_kernels:
             self.n_ch_out = self.n_base_movers
         else:
             self.n_ch_out = self.n_free_kernels
+
+        self.VA_n_ch = (1 + self.n_act)
+        # number of conv1 outputs = number of conv2 outputs
+        # self.conv1_n_ch = self.VA_n_ch*self.n_ch_out
+        # number of conv1 outputs = number of conv1 inputs
+        self.conv1_n_ch = self.n_frames*len(self.pt.mover_prototypes) + \
+        (self.n_frames-1)*len(reduce(lambda l1, l2: l1 + l2, self.pt.mover_disps))\
+        + self.n_free_kernels
+
+        # self.conv1_n_ch = 2*(self.VA_n_ch*self.n_ch_out)
+        # self.conv1_n_ch_rate = self.conv1_n_ch/self.n_ch_out
 
         for i, proto in enumerate(self.pt.mover_prototypes):
             mov, filt = self.get_conv_mover(proto, i)
@@ -338,10 +349,17 @@ class protoModelnetwork():
         #     m_id_shift += len(self.pt.mover_disps[m_id])
         # self.cd_equiv = tf.concat(eq_tensors,3)
         self.cd_equiv = self.conv_disps
+
+        # testing -- no disps
+        # self.conv_dm = self.conv_movers
+        # self.conv_dm_kernels = self.conv_mover_kernels
+
+        # with disps
         self.conv_dm = tf.concat([self.cd_equiv,
                                             self.conv_movers],3)
         self.conv_dm_kernels = tf.concat([self.conv_disp_kernels,
                                           self.conv_mover_kernels],2)
+
         #self.cdp_equiv = self.conv_dm_pool
         self.out_shape = self.conv_movers_frame1.get_shape().as_list()
         self.out_shape[-1] = self.n_ch_out
@@ -379,27 +397,38 @@ class protoModelnetwork():
         # self.cd_with_pos = tf.concat([self.conv_dm,
         #                               self.conv_moms],3)
         self.cd_with_pos = self.conv_dm
+
         if self.n_free_kernels > 0:
             self.bg_imageIn = tf.tile(
                 tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3]),
                 [self.batch_size,1,1,1])
+            fk_init = np.zeros((5,5,3,self.n_free_kernels))
+            for k in range(self.n_free_kernels):
+                 bg_kern = self.bg_colors[np.random.choice(self.bg_colors.shape[0], 25), :].reshape((5,5,3)) / 255.
+
+                 bg_kern_centered = bg_kern - np.mean(bg_kern,(0,1))
+
+                 bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
+                 bg_kern = bg_kern_centered / bg_kern_norm
+
+                 fk_init[:,...,:,k] = bg_kern
             self.free_kernels = slim.conv2d(inputs=self.bg_imageIn,
                                             num_outputs=self.n_free_kernels,
                                             kernel_size=[5,5],stride=[1,1],
                                             padding='SAME',
                                             scope=self.model_name +
                                                    "/pg_free",
-                                            reuse=(self.net_index>0))
+                                            reuse=(self.net_index>0),
+                                            weights_initializer=tf.constant_initializer(fk_init))
             with tf.variable_scope(self.model_name +
                    "/pg_conv1/free",
                    reuse=(self.net_index>0)):
                    self.free_kernel_kernels = tf.get_variable(name='kernels',
                                            shape=[5,5,
                                                   self.n_free_kernels,
-                                                  self.VA_n_ch*self.n_ch_out],
+                                                  self.conv1_n_ch],
                                           initializer=
-                                          tf.contrib.layers.xavier_initializer()
-                                          )
+                                          tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True))
 
             self.cd_with_pos = tf.concat([self.conv_dm, self.free_kernels],3)
             self.conv1_model_kernel = tf.concat([self.conv_dm_kernels,
@@ -413,20 +442,26 @@ class protoModelnetwork():
         Leaky1 = keras.layers.LeakyReLU(0.1)
 
         self.conv1_model_list = []
-        for m_id, kern in enumerate(self.conv1_model_kernel_list):
-            conv1_model_c2d = tf.nn.conv2d(
-                input=self.cd_with_pos, filter=kern,
-                strides=[1,1,1,1], padding='SAME'
-            )
-            with tf.variable_scope(self.model_name +
-                   "/pg_conv1/mover" + str(m_id),
-                   reuse=(self.net_index>0)):
-                conv1_model_bias = tf.get_variable(name='bias',
-                                                        shape=[self.VA_n_ch],
-                                                        initializer=tf.zeros_initializer)
-            conv1_model_b = tf.nn.bias_add(conv1_model_c2d,
-                                                conv1_model_bias)
-            self.conv1_model_list.append(Leaky1(conv1_model_b))
+        # for m_id, kern in enumerate(self.conv1_model_kernel_list):
+        #     conv1_model_c2d = tf.nn.conv2d(
+        #         input=self.cd_with_pos, filter=kern,
+        #         strides=[1,1,1,1], padding='SAME'
+        #     )
+        #     with tf.variable_scope(self.model_name +
+        #            "/pg_conv1/mover" + str(m_id),
+        #            reuse=(self.net_index>0)):
+        #         conv1_model_bias = tf.get_variable(name='bias',
+        #                                                 shape=[self.conv1_n_ch_rate],
+        #                                                 initializer=tf.zeros_initializer)
+        #     conv1_model_b = tf.nn.bias_add(conv1_model_c2d,
+        #                                         conv1_model_bias)
+        #     self.conv1_model_list.append(Leaky1(conv1_model_b))
+
+        self.conv1_model = tf.nn.conv2d(
+            input=self.cd_with_pos, filter=self.conv1_model_kernel,
+            strides=[1,1,1,1], padding='SAME'
+        )
+
         # self.conv1_model = slim.conv2d( \
         #     inputs=self.cd_with_pos,num_outputs=self.VA_n_ch*self.n_ch_out,\
         #                          kernel_size=[5,5],stride=[1,1],\
@@ -436,30 +471,31 @@ class protoModelnetwork():
 
         Leaky2 = keras.layers.LeakyReLU(0.1)
 
-        # self.conv2_model = slim.conv2d( \
-        #     inputs=self.conv1_model,num_outputs=self.VA_n_ch*self.n_ch_out, \
-        #                                kernel_size=[5,5],stride=[1,1], \
-        #                                padding='SAME',
-        #                               activation_fn=Leaky2,
-        #                               reuse=(self.net_index>0))
+        self.conv2_model = slim.conv2d( \
+            inputs=self.conv1_model,num_outputs=self.VA_n_ch*self.n_ch_out, \
+                                       kernel_size=[5,5],stride=[1,1], \
+                                       padding='SAME',
+                                      activation_fn=Leaky2,
+                                      reuse=(self.net_index>0))
 
-        self.conv2_model_list = []
-        for m_id, conv in enumerate(self.conv1_model_list):
-            conv2_model = slim.conv2d( \
-                inputs=conv,num_outputs=self.VA_n_ch, \
-                                           kernel_size=[5,5],stride=[1,1], \
-                                           padding='SAME',
-                                          activation_fn=Leaky2,
-                                          scope=(self.model_name +
-                                                 "/pg_conv2/mover" + str(m_id)),
-                                          reuse=(self.net_index>0))
-            self.conv2_model_list.append(conv2_model)
-        self.conv2_model = tf.concat(self.conv2_model_list,3)
+        # self.conv2_model_list = []
+        # for m_id, conv in enumerate(self.conv1_model_list):
+        #     conv2_model = slim.conv2d( \
+        #         inputs=conv,num_outputs=self.VA_n_ch, \
+        #                                    kernel_size=[5,5],stride=[1,1], \
+        #                                    padding='SAME',
+        #                                   activation_fn=Leaky2,
+        #                                   scope=(self.model_name +
+        #                                          "/pg_conv2/mover" + str(m_id)),
+        #                                   reuse=(self.net_index>0))
+        #     self.conv2_model_list.append(conv2_model)
+        # self.conv2_model = tf.concat(self.conv2_model_list,3)
 
         self.streams = tf.split(self.conv2_model,
                                              self.VA_n_ch,
                                              3)
-        self.streamV = self.streams[0] + 30.*self.conv_moms
+        self.mom_mult = 30.
+        self.streamV = self.streams[0] + self.mom_mult*self.conv_moms
         self.streamA = tf.stack(self.streams[1:],4)
         self.actions = tf.placeholder(shape=[None],dtype=tf.int32)
         self.old_actions = tf.placeholder(shape=[None],dtype=tf.int32)
@@ -652,9 +688,9 @@ class protoModelnetwork():
                 reuse=(ind < self.existing_filters_counts[0])):
 
             conv1_kernel = tf.get_variable(name='kernel',
-                                    shape=[5,5,self.n_frames,self.VA_n_ch*self.n_ch_out],
+                                    shape=[5,5,self.n_frames,self.conv1_n_ch],
                                    initializer=
-                                   tf.contrib.layers.xavier_initializer()
+                                   tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True)
                                    )
 
         return self.conv_p0, conv1_kernel
@@ -838,9 +874,9 @@ class protoModelnetwork():
                     conv1_kernel = tf.get_variable(name='kernel',
                                             shape=[5,5,
                                                    init_bias.shape[0],
-                                                   self.VA_n_ch*self.n_ch_out],
+                                                   self.conv1_n_ch],
                                            initializer=
-                                           tf.contrib.layers.xavier_initializer()
+                                           tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True)
                                            )
                     conv1_kernels.append(conv1_kernel)
         conv_disps_out = tf.concat(conv_disps, 3)
