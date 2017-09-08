@@ -267,8 +267,7 @@ class protoModelnetwork():
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
-        self.bg = bg
-        self.bg_colors = np.reshape(bg, (-1, 3))
+        self.bg = bg/255.
         self.n_frames = n_frames
 
         self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
@@ -402,16 +401,31 @@ class protoModelnetwork():
             self.bg_imageIn = tf.tile(
                 tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3]),
                 [self.batch_size,1,1,1])
-            fk_init = np.zeros((5,5,3,self.n_free_kernels))
-            for k in range(self.n_free_kernels):
-                 bg_kern = self.bg_colors[np.random.choice(self.bg_colors.shape[0], 25), :].reshape((5,5,3)) / 255.
+            # fk_init = np.zeros((5,5,3,self.n_free_kernels))
+            # self.bg_colors = np.reshape(bg, (-1, 3))
+            # self.bg_colors = np.unique(self.bg_colors, axis=0)
+            # for k in range(self.n_free_kernels):
+            #      bg_kern = self.bg_colors[np.random.choice(self.bg_colors.shape[0], 25), :].reshape((5,5,3)) / 255.
+            #
+            #      bg_kern_centered = bg_kern - np.mean(bg_kern,(0,1))
+            #
+            #      bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
+            #      bg_kern = bg_kern_centered / bg_kern_norm
+            #
+            #      fk_init[:,...,:,k] = bg_kern
+            fk_list = []
+            while len(fk_list) < self.n_free_kernels:
+                bg_kern = np.zeros((5,5,3))
+                while np.max(bg_kern) == 0 or np.var(bg_kern) == 0:
+                    ul = (np.random.randint(bg.shape[0]-5), np.random.randint(bg.shape[1]-5))
+                    bg_kern = bg[ul[0]:ul[0]+5, ul[1]:ul[1]+5,:]
+                bg_kern_centered = bg_kern# - np.mean(bg_kern,(0,1))
 
-                 bg_kern_centered = bg_kern - np.mean(bg_kern,(0,1))
+                bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
+                bg_kern = bg_kern_centered / bg_kern_norm
 
-                 bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
-                 bg_kern = bg_kern_centered / bg_kern_norm
-
-                 fk_init[:,...,:,k] = bg_kern
+                fk_list.append(bg_kern)
+            fk_init = np.stack(fk_list,3)
             self.free_kernels = slim.conv2d(inputs=self.bg_imageIn,
                                             num_outputs=self.n_free_kernels,
                                             kernel_size=[5,5],stride=[1,1],
@@ -419,7 +433,8 @@ class protoModelnetwork():
                                             scope=self.model_name +
                                                    "/pg_free",
                                             reuse=(self.net_index>0),
-                                            weights_initializer=tf.constant_initializer(fk_init))
+                                            weights_initializer=tf.constant_initializer(fk_init),
+                                            biases_initializer=None)
             with tf.variable_scope(self.model_name +
                    "/pg_conv1/free",
                    reuse=(self.net_index>0)):
