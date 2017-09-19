@@ -263,7 +263,7 @@ class protoModelnetwork():
         self.eps = eps
         self.frame_h = frame_h
         self.frame_w = frame_w
-        self.n_act = (env.action_space.n)**2
+        self.n_act = env.action_space.n#(env.action_space.n)**2
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
@@ -509,13 +509,14 @@ class protoModelnetwork():
         self.streams = tf.split(self.conv2_model,
                                              self.VA_n_ch,
                                              3)
-        self.mom_mult = 30.
+        self.mom_mult = 20.
         self.streamV = self.streams[0] + self.mom_mult*self.conv_moms
         self.streamA = tf.stack(self.streams[1:],4)
         self.actions = tf.placeholder(shape=[None],dtype=tf.int32)
         self.old_actions = tf.placeholder(shape=[None],dtype=tf.int32)
 
-        self.actions_ind = self.actions*(env.action_space.n) + self.old_actions
+        self.actions_ind = self.actions
+        # self.actions_ind = self.actions*(env.action_space.n) + self.old_actions
         self.actions_onehot = tf.one_hot(self.actions_ind,self.n_act,dtype=tf.float32)
 
         self.pred = self.streamV +\
@@ -693,10 +694,14 @@ class protoModelnetwork():
                               )
             self.biases = tf.get_variable(name='bias',shape=(self.n_frames),
                                     initializer=tf.constant_initializer(
-                                        -0.9))
+                                        -0.))
             self.bias = tf.nn.bias_add(self.conv, self.biases)
             self.conv_p0 = tf.nn.relu(self.bias)
-            self.conv_p0 = tf.cast(self.conv_p0>0.,'float32')
+            # self.conv_p0 = tf.cast(self.conv_p0>0.,'float32')
+            conv_max = tf.reduce_max(self.conv_p0, (0,1,2))
+            eq_max = tf.cast((self.conv_p0 - conv_max) >= 0., 'float32')
+            max_sufficient = tf.cast(conv_max > 0.5, 'float32')
+            self.conv_p0 = eq_max * max_sufficient
 
         with tf.variable_scope(self.model_name +
                "/pg_conv1/prototypes/proto" + str(self.pt.mover_ids[ind]),
