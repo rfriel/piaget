@@ -247,7 +247,8 @@ class protoModelnetwork():
                  net_index=0,
                  n_free_kernels = 4,
                  train_free_kernels=True,
-                 bg=None):
+                 bg=None,
+                 n_frames=2):
 
         self.pt = pt
         self.existing_filters_counts = existing_filters_counts
@@ -262,14 +263,15 @@ class protoModelnetwork():
         self.eps = eps
         self.frame_h = frame_h
         self.frame_w = frame_w
-        self.n_act = (env.action_space.n)**2
+        self.n_act = env.action_space.n#(env.action_space.n)**2
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
-        self.bg = bg
+        self.bg = bg/255.
+        self.n_frames = n_frames
 
-        self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*2],dtype=tf.float32)
-        self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,frame_h,frame_w,3*2])
+        self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
+        self.imageIn = tf.reshape(self.scalarInput/255.,shape=[-1,frame_h,frame_w,3*n_frames])
         self.batch_size = tf.shape(self.imageIn)[0]
 
         self.mover_conv_list = []
@@ -279,11 +281,21 @@ class protoModelnetwork():
         self.disp_kernel_list = []
         self.disp_filter_list = []
 
-        self.VA_n_ch = (1 + self.n_act)
         if self.train_free_kernels:
             self.n_ch_out = self.n_base_movers
         else:
             self.n_ch_out = self.n_free_kernels
+
+        self.VA_n_ch = (1 + self.n_act)
+        # number of conv1 outputs = number of conv2 outputs
+        # self.conv1_n_ch = self.VA_n_ch*self.n_ch_out
+        # number of conv1 outputs = number of conv1 inputs
+        self.conv1_n_ch = self.n_frames*len(self.pt.mover_prototypes) + \
+        (self.n_frames-1)*len(reduce(lambda l1, l2: l1 + l2, self.pt.mover_disps))\
+        + self.n_free_kernels
+
+        # self.conv1_n_ch = 2*(self.VA_n_ch*self.n_ch_out)
+        # self.conv1_n_ch_rate = self.conv1_n_ch/self.n_ch_out
 
         for i, proto in enumerate(self.pt.mover_prototypes):
             mov, filt = self.get_conv_mover(proto, i)
@@ -294,7 +306,7 @@ class protoModelnetwork():
         self.conv_mover_kernels = tf.concat(self.mover_filter_list,2)
 
         self.mover_conv_list_frame1 = [
-            self.conv_movers[:,...,2*i+1:2*i+2]
+            self.conv_movers[:,...,n_frames*(i+1)-1:n_frames*(i+1)]
             for i in range(len(self.pt.mover_prototypes))]
         self.conv_movers_frame1 = tf.concat(self.mover_conv_list_frame1,3)
 
@@ -336,10 +348,17 @@ class protoModelnetwork():
         #     m_id_shift += len(self.pt.mover_disps[m_id])
         # self.cd_equiv = tf.concat(eq_tensors,3)
         self.cd_equiv = self.conv_disps
+
+        # testing -- no disps
+        # self.conv_dm = self.conv_movers
+        # self.conv_dm_kernels = self.conv_mover_kernels
+
+        # with disps
         self.conv_dm = tf.concat([self.cd_equiv,
                                             self.conv_movers],3)
         self.conv_dm_kernels = tf.concat([self.conv_disp_kernels,
                                           self.conv_mover_kernels],2)
+
         #self.cdp_equiv = self.conv_dm_pool
         self.out_shape = self.conv_movers_frame1.get_shape().as_list()
         self.out_shape[-1] = self.n_ch_out
@@ -377,27 +396,54 @@ class protoModelnetwork():
         # self.cd_with_pos = tf.concat([self.conv_dm,
         #                               self.conv_moms],3)
         self.cd_with_pos = self.conv_dm
+
         if self.n_free_kernels > 0:
             self.bg_imageIn = tf.tile(
-                tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3*2]),
+                tf.reshape(self.bg,shape=[-1,frame_h,frame_w,3]),
                 [self.batch_size,1,1,1])
-            self.free_kernels = slim.conv2d(inputs=self.imageIn,
+            # fk_init = np.zeros((5,5,3,self.n_free_kernels))
+            # self.bg_colors = np.reshape(bg, (-1, 3))
+            # self.bg_colors = np.unique(self.bg_colors, axis=0)
+            # for k in range(self.n_free_kernels):
+            #      bg_kern = self.bg_colors[np.random.choice(self.bg_colors.shape[0], 25), :].reshape((5,5,3)) / 255.
+            #
+            #      bg_kern_centered = bg_kern - np.mean(bg_kern,(0,1))
+            #
+            #      bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
+            #      bg_kern = bg_kern_centered / bg_kern_norm
+            #
+            #      fk_init[:,...,:,k] = bg_kern
+            fk_list = []
+            while len(fk_list) < self.n_free_kernels:
+                bg_kern = np.zeros((5,5,3))
+                while np.max(bg_kern) == 0 or np.var(bg_kern) == 0:
+                    ul = (np.random.randint(bg.shape[0]-5), np.random.randint(bg.shape[1]-5))
+                    bg_kern = bg[ul[0]:ul[0]+5, ul[1]:ul[1]+5,:]
+                bg_kern_centered = bg_kern# - np.mean(bg_kern,(0,1))
+
+                bg_kern_norm = np.sum(bg_kern*bg_kern_centered)
+                bg_kern = bg_kern_centered / bg_kern_norm
+
+                fk_list.append(bg_kern)
+            fk_init = np.stack(fk_list,3)
+            self.free_kernels = slim.conv2d(inputs=self.bg_imageIn,
                                             num_outputs=self.n_free_kernels,
                                             kernel_size=[5,5],stride=[1,1],
                                             padding='SAME',
                                             scope=self.model_name +
                                                    "/pg_free",
-                                            reuse=(self.net_index>0))
+                                            reuse=(self.net_index>0),
+                                            weights_initializer=tf.constant_initializer(fk_init),
+                                            biases_initializer=None)
             with tf.variable_scope(self.model_name +
                    "/pg_conv1/free",
                    reuse=(self.net_index>0)):
                    self.free_kernel_kernels = tf.get_variable(name='kernels',
                                            shape=[5,5,
                                                   self.n_free_kernels,
-                                                  self.VA_n_ch*self.n_ch_out],
+                                                  self.conv1_n_ch],
                                           initializer=
-                                          tf.contrib.layers.xavier_initializer()
-                                          )
+                                          tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True))
 
             self.cd_with_pos = tf.concat([self.conv_dm, self.free_kernels],3)
             self.conv1_model_kernel = tf.concat([self.conv_dm_kernels,
@@ -411,20 +457,26 @@ class protoModelnetwork():
         Leaky1 = keras.layers.LeakyReLU(0.1)
 
         self.conv1_model_list = []
-        for m_id, kern in enumerate(self.conv1_model_kernel_list):
-            conv1_model_c2d = tf.nn.conv2d(
-                input=self.cd_with_pos, filter=kern,
-                strides=[1,1,1,1], padding='SAME'
-            )
-            with tf.variable_scope(self.model_name +
-                   "/pg_conv1/mover" + str(m_id),
-                   reuse=(self.net_index>0)):
-                conv1_model_bias = tf.get_variable(name='bias',
-                                                        shape=[self.VA_n_ch],
-                                                        initializer=tf.zeros_initializer)
-            conv1_model_b = tf.nn.bias_add(conv1_model_c2d,
-                                                conv1_model_bias)
-            self.conv1_model_list.append(Leaky1(conv1_model_b))
+        # for m_id, kern in enumerate(self.conv1_model_kernel_list):
+        #     conv1_model_c2d = tf.nn.conv2d(
+        #         input=self.cd_with_pos, filter=kern,
+        #         strides=[1,1,1,1], padding='SAME'
+        #     )
+        #     with tf.variable_scope(self.model_name +
+        #            "/pg_conv1/mover" + str(m_id),
+        #            reuse=(self.net_index>0)):
+        #         conv1_model_bias = tf.get_variable(name='bias',
+        #                                                 shape=[self.conv1_n_ch_rate],
+        #                                                 initializer=tf.zeros_initializer)
+        #     conv1_model_b = tf.nn.bias_add(conv1_model_c2d,
+        #                                         conv1_model_bias)
+        #     self.conv1_model_list.append(Leaky1(conv1_model_b))
+
+        self.conv1_model = tf.nn.conv2d(
+            input=self.cd_with_pos, filter=self.conv1_model_kernel,
+            strides=[1,1,1,1], padding='SAME'
+        )
+
         # self.conv1_model = slim.conv2d( \
         #     inputs=self.cd_with_pos,num_outputs=self.VA_n_ch*self.n_ch_out,\
         #                          kernel_size=[5,5],stride=[1,1],\
@@ -434,35 +486,37 @@ class protoModelnetwork():
 
         Leaky2 = keras.layers.LeakyReLU(0.1)
 
-        # self.conv2_model = slim.conv2d( \
-        #     inputs=self.conv1_model,num_outputs=self.VA_n_ch*self.n_ch_out, \
-        #                                kernel_size=[5,5],stride=[1,1], \
-        #                                padding='SAME',
-        #                               activation_fn=Leaky2,
-        #                               reuse=(self.net_index>0))
+        self.conv2_model = slim.conv2d( \
+            inputs=self.conv1_model,num_outputs=self.VA_n_ch*self.n_ch_out, \
+                                       kernel_size=[5,5],stride=[1,1], \
+                                       padding='SAME',
+                                      activation_fn=Leaky2,
+                                      reuse=(self.net_index>0))
 
-        self.conv2_model_list = []
-        for m_id, conv in enumerate(self.conv1_model_list):
-            conv2_model = slim.conv2d( \
-                inputs=conv,num_outputs=self.VA_n_ch, \
-                                           kernel_size=[5,5],stride=[1,1], \
-                                           padding='SAME',
-                                          activation_fn=Leaky2,
-                                          scope=(self.model_name +
-                                                 "/pg_conv2/mover" + str(m_id)),
-                                          reuse=(self.net_index>0))
-            self.conv2_model_list.append(conv2_model)
-        self.conv2_model = tf.concat(self.conv2_model_list,3)
+        # self.conv2_model_list = []
+        # for m_id, conv in enumerate(self.conv1_model_list):
+        #     conv2_model = slim.conv2d( \
+        #         inputs=conv,num_outputs=self.VA_n_ch, \
+        #                                    kernel_size=[5,5],stride=[1,1], \
+        #                                    padding='SAME',
+        #                                   activation_fn=Leaky2,
+        #                                   scope=(self.model_name +
+        #                                          "/pg_conv2/mover" + str(m_id)),
+        #                                   reuse=(self.net_index>0))
+        #     self.conv2_model_list.append(conv2_model)
+        # self.conv2_model = tf.concat(self.conv2_model_list,3)
 
         self.streams = tf.split(self.conv2_model,
                                              self.VA_n_ch,
                                              3)
-        self.streamV = self.streams[0] + 30.*self.conv_moms
+        self.mom_mult = 20.
+        self.streamV = self.streams[0] + self.mom_mult*self.conv_moms
         self.streamA = tf.stack(self.streams[1:],4)
         self.actions = tf.placeholder(shape=[None],dtype=tf.int32)
         self.old_actions = tf.placeholder(shape=[None],dtype=tf.int32)
 
-        self.actions_ind = self.actions*(env.action_space.n) + self.old_actions
+        self.actions_ind = self.actions
+        # self.actions_ind = self.actions*(env.action_space.n) + self.old_actions
         self.actions_onehot = tf.one_hot(self.actions_ind,self.n_act,dtype=tf.float32)
 
         self.pred = self.streamV +\
@@ -613,10 +667,18 @@ class protoModelnetwork():
         p0_norm = np.sum(p0*(proto/255.))
         p0 = p0 / p0_norm
 
-        p0_frame0 = np.concatenate([p0, np.zeros_like(p0)],2)
-        p0_frame1 = np.concatenate([np.zeros_like(p0), p0],2)
+        # p0_frame0 = np.concatenate([p0, np.zeros_like(p0)],2)
+        # p0_frame1 = np.concatenate([np.zeros_like(p0), p0],2)
+        p0_frame_list = []
+        for i in range(self.n_frames):
+            p0_frame_i = np.zeros((p0.shape[0], p0.shape[1],
+                                   3*self.n_frames))
+            p0_frame_i[:,:,(i*3):((i+1)*3)] = p0
+            p0_frame_list.append(p0_frame_i)
 
-        p0_multi_frame = np.stack([p0_frame0, p0_frame1],3)
+        #p0_multi_frame = np.stack([p0_frame0, p0_frame1],3)
+        p0_multi_frame = np.stack(p0_frame_list,3)
+
         with tf.variable_scope(self.model_name +
                                "/piaget/prototypes/proto" +
                                str(self.pt.mover_ids[ind]),
@@ -630,21 +692,25 @@ class protoModelnetwork():
                                strides=[1,1,1,1],
                                padding='SAME'
                               )
-            self.biases = tf.get_variable(name='bias',shape=(2),
+            self.biases = tf.get_variable(name='bias',shape=(self.n_frames),
                                     initializer=tf.constant_initializer(
-                                        -0.9))
+                                        -0.))
             self.bias = tf.nn.bias_add(self.conv, self.biases)
             self.conv_p0 = tf.nn.relu(self.bias)
-            self.conv_p0 = tf.cast(self.conv_p0>0.,'float32')
+            # self.conv_p0 = tf.cast(self.conv_p0>0.,'float32')
+            conv_max = tf.reduce_max(self.conv_p0, (0,1,2))
+            eq_max = tf.cast((self.conv_p0 - conv_max) >= 0., 'float32')
+            max_sufficient = tf.cast(conv_max > 0.5, 'float32')
+            self.conv_p0 = eq_max * max_sufficient
 
         with tf.variable_scope(self.model_name +
                "/pg_conv1/prototypes/proto" + str(self.pt.mover_ids[ind]),
                 reuse=(ind < self.existing_filters_counts[0])):
 
             conv1_kernel = tf.get_variable(name='kernel',
-                                    shape=[5,5,2,self.VA_n_ch*self.n_ch_out],
+                                    shape=[5,5,self.n_frames,self.conv1_n_ch],
                                    initializer=
-                                   tf.contrib.layers.xavier_initializer()
+                                   tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True)
                                    )
 
         return self.conv_p0, conv1_kernel
@@ -743,92 +809,96 @@ class protoModelnetwork():
         conv_moms = []
         conv1_kernels = []
         for j, disp in enumerate(disps):
-            with tf.variable_scope(self.model_name +
-                   "/piaget/mover_disps/mover" + str(self.pt.mover_ids[ind]) +
-                    "/disp" + str(j),
-                    reuse=(
-                        (ind < self.existing_filters_counts[0]) and
-                        (j < self.existing_filters_counts[1][ind])
-                        )):
-                dx, dy = disp
-                blob_frame0 = np.pad(blob,(\
-                             (2*abs(dy)*(dy<0), 2*abs(dy)*(dy>0)),\
-                             (2*abs(dx)*(dx<0), 2*abs(dx)*(dx>0))\
-                            ),
-                       'constant')
-                blob_frame1 = np.pad(blob,(\
-                             (abs(dy), abs(dy)),\
-                             (abs(dx), abs(dx))\
-                            ),
-                       'constant')
-                blob_momentum = blob_frame0
-                blob_momentum = blob_momentum[:,:,np.newaxis,np.newaxis]
-                # special treatment for (0,0) motions bc they indicate
-                # movers appearing and disappearing
-                appear_disappear = ((dx == 0) and (dy == 0))
-                if not appear_disappear:
-                    blob_multi_frame = np.stack([blob_frame0, blob_frame1],2)
-                    # blob_multi_frame = np.stack(\
-                    #                             [blob_frame0-blob_frame1, \
-                    #                              blob_frame1-blob_frame0]\
-                    #                             ,2)
-                    blob_multi_frame = np.expand_dims(blob_multi_frame, 3)
-                    init_bias = np.array([-1.])
-                else:
-                    blob_multi_frame_appear = np.stack(
-                        [-blob_frame0, blob_frame1],2)
-                    blob_multi_frame_disappear = np.stack(
-                        [blob_frame0, -blob_frame1],2)
-                    blob_multi_frame = np.stack([blob_multi_frame_appear,
-                                                 blob_multi_frame_disappear],
-                                                3)
-                    blob_momentum = np.concatenate([np.zeros_like(blob_momentum),
-                                                    np.zeros_like(blob_momentum)
-                                                    ],2)
-                    init_bias = np.array([0.,0])
-                self.kernel = tf.get_variable(name='kernel',
-                                        shape=blob_multi_frame.shape,
-                                       initializer=tf.constant_initializer(
-                                           blob_multi_frame))
-                mover = self.conv_movers[:,...,2*ind:2*ind+2]
-                self.conv = tf.nn.conv2d(input=mover,
-                   filter=self.kernel,
-                   strides=[1,1,1,1],
-                   padding='SAME'
-                  )
-                self.biases = tf.get_variable(name='bias',shape=init_bias.shape,
-                                        initializer=tf.constant_initializer(
-                                            init_bias))
-                self.bias = tf.nn.bias_add(self.conv, self.biases)
-                conv_disp = tf.nn.relu(self.bias)
-                conv_disps.append(conv_disp)
+            for frame_ind in range(self.n_frames-1):
+                with tf.variable_scope(self.model_name +
+                       "/piaget/mover_disps/mover" + str(self.pt.mover_ids[ind]) +
+                        "/disp" + str(j) + '/frame' + str(frame_ind),
+                        reuse=(
+                            (ind < self.existing_filters_counts[0]) and
+                            (j < self.existing_filters_counts[1][ind])
+                            )):
+                    dx, dy = disp
+                    blob_frame0 = np.pad(blob,(\
+                                 (2*abs(dy)*(dy<0), 2*abs(dy)*(dy>0)),\
+                                 (2*abs(dx)*(dx<0), 2*abs(dx)*(dx>0))\
+                                ),
+                           'constant')
+                    blob_frame1 = np.pad(blob,(\
+                                 (abs(dy), abs(dy)),\
+                                 (abs(dx), abs(dx))\
+                                ),
+                           'constant')
+                    blob_momentum = blob_frame0
+                    blob_momentum = blob_momentum[:,:,np.newaxis,np.newaxis]
+                    # special treatment for (0,0) motions bc they indicate
+                    # movers appearing and disappearing
+                    appear_disappear = ((dx == 0) and (dy == 0))
+                    if not appear_disappear:
+                        blob_multi_frame = np.stack([blob_frame0, blob_frame1],2)
+                        # blob_multi_frame = np.stack(\
+                        #                             [blob_frame0-blob_frame1, \
+                        #                              blob_frame1-blob_frame0]\
+                        #                             ,2)
+                        blob_multi_frame = np.expand_dims(blob_multi_frame, 3)
+                        init_bias = np.array([-1.])
+                    else:
+                        blob_multi_frame_appear = np.stack(
+                            [-blob_frame0, blob_frame1],2)
+                        blob_multi_frame_disappear = np.stack(
+                            [blob_frame0, -blob_frame1],2)
+                        blob_multi_frame = np.stack([blob_multi_frame_appear,
+                                                     blob_multi_frame_disappear],
+                                                    3)
+                        blob_momentum = np.concatenate([np.zeros_like(blob_momentum),
+                                                        np.zeros_like(blob_momentum)
+                                                        ],2)
+                        init_bias = np.array([0.,0])
+                    self.kernel = tf.get_variable(name='kernel',
+                                            shape=blob_multi_frame.shape,
+                                           initializer=tf.constant_initializer(
+                                               blob_multi_frame))
 
-                mom_kernel = tf.get_variable(name='mom_kernel',
-                                        shape=blob_momentum.shape,
-                                       initializer=tf.constant_initializer(
-                           blob_momentum))
-                conv_momentum = tf.nn.conv2d(input=conv_disp,
-                   filter=mom_kernel,
-                   strides=[1,1,1,1],
-                   padding='SAME'
-                  )
-                conv_moms.append(conv_momentum)
-            with tf.variable_scope(self.model_name +
-                   "/pg_conv1/mover_disps/mover" + str(self.pt.mover_ids[ind]) +
-                    "/disp" + str(j),
-                    reuse=(
-                        (ind < self.existing_filters_counts[0]) and
-                        (j < self.existing_filters_counts[1][ind])
-                        )):
+                    mover_frame_index = (self.n_frames * ind) + frame_ind
+                    mover = self.conv_movers[:,...,mover_frame_index:mover_frame_index+2]
+                    self.conv = tf.nn.conv2d(input=mover,
+                       filter=self.kernel,
+                       strides=[1,1,1,1],
+                       padding='SAME'
+                      )
+                    self.biases = tf.get_variable(name='bias',shape=init_bias.shape,
+                                            initializer=tf.constant_initializer(
+                                                init_bias))
+                    self.bias = tf.nn.bias_add(self.conv, self.biases)
+                    conv_disp = tf.nn.relu(self.bias)
+                    conv_disps.append(conv_disp)
 
-                conv1_kernel = tf.get_variable(name='kernel',
-                                        shape=[5,5,
-                                               init_bias.shape[0],
-                                               self.VA_n_ch*self.n_ch_out],
-                                       initializer=
-                                       tf.contrib.layers.xavier_initializer()
-                                       )
-                conv1_kernels.append(conv1_kernel)
+                    if frame_ind == self.n_frames-2: # last frame
+                        mom_kernel = tf.get_variable(name='mom_kernel',
+                                                shape=blob_momentum.shape,
+                                               initializer=tf.constant_initializer(
+                                   blob_momentum))
+                        conv_momentum = tf.nn.conv2d(input=conv_disp,
+                           filter=mom_kernel,
+                           strides=[1,1,1,1],
+                           padding='SAME'
+                          )
+                        conv_moms.append(conv_momentum)
+                with tf.variable_scope(self.model_name +
+                       "/pg_conv1/mover_disps/mover" + str(self.pt.mover_ids[ind]) +
+                        "/disp" + str(j)  + '/frame' + str(frame_ind),
+                        reuse=(
+                            (ind < self.existing_filters_counts[0]) and
+                            (j < self.existing_filters_counts[1][ind])
+                            )):
+
+                    conv1_kernel = tf.get_variable(name='kernel',
+                                            shape=[5,5,
+                                                   init_bias.shape[0],
+                                                   self.conv1_n_ch],
+                                           initializer=
+                                           tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_OUT', uniform=True)
+                                           )
+                    conv1_kernels.append(conv1_kernel)
         conv_disps_out = tf.concat(conv_disps, 3)
         conv_moms_out = sum(conv_moms)
         conv1_kernels_out = tf.concat(conv1_kernels, 2)
