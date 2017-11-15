@@ -267,7 +267,8 @@ class protoModelnetwork():
 
         self.mean_reward_pool = mean_reward_pool
         self.dists = dists
-        self.bg = bg/255.
+        if bg is not None:
+            self.bg = bg/255.
         self.n_frames = n_frames
 
         self.scalarInput =  tf.placeholder(shape=[None,frame_h*frame_w*3*n_frames],dtype=tf.float32)
